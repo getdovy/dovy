@@ -56,6 +56,7 @@ type Recipe struct {
 	Description string   `toml:"description"`
 	Kind        string   `toml:"kind"`
 	Version     string   `toml:"version"`
+	Revision    int      `toml:"revision"`
 	Maintainer  string   `toml:"maintainer"`
 	Debian      []int    `toml:"debian"`
 	Requires    []string `toml:"requires"`
@@ -88,6 +89,9 @@ func (r *Recipe) Package() string {
 	}
 	return "dovy-" + r.Name
 }
+
+// Rev is the package revision (ADR 0010).
+func (r *Recipe) Rev() int { return max(r.Revision, 1) }
 
 var (
 	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*$`)
@@ -167,6 +171,9 @@ func check(r *Recipe) []string {
 	if r.Version == "" || strings.EqualFold(r.Version, "latest") {
 		add("version: an exact version")
 	}
+	if r.Revision < 0 {
+		add("revision: 1 or more")
+	}
 	if r.Maintainer == "" {
 		add("maintainer missing")
 	}
@@ -192,6 +199,15 @@ func check(r *Recipe) []string {
 		}
 		if !hexRe.MatchString(s.SHA256) {
 			add("source %s: sha256 must be 64 lowercase hex characters", s.URL)
+		}
+	}
+	for _, dst := range sorted(r.Install) {
+		src := r.Install[dst]
+		if !strings.HasPrefix(dst, "/usr/") || filepath.Clean(dst) != dst {
+			add("install %s: an absolute path under /usr/", dst)
+		}
+		if src == "" || filepath.IsAbs(src) || filepath.Clean(src) != src || strings.HasPrefix(src, "..") {
+			add("install %s: source %q must be relative, without ..", dst, src)
 		}
 	}
 	for _, f := range r.Files {
