@@ -1,0 +1,37 @@
+────────────────────────────────── Replacing ───────────────────────────────────
+  Package                   Version           Source      Size
+  nvidia-open               590.48.01-1       NVIDIA   1.2 MiB
+    replaces nvidia-driver 550.163-1 (Debian)
+
+────────────────────────────────── Installing ──────────────────────────────────
+  Package                   Version           Source      Size
+  steam                     1.0.0.85-1~dovy1  dovy     4.2 MiB
+
+─────────────────────────── Installing dependencies ────────────────────────────
+  Package                   Version           Source      Size
+  libasound2t64:i386        1.2.14-1          Debian   412 KiB
+  libc6:i386                2.41-12           Debian   2.7 MiB
+  libdrm2:i386              2.4.124-2         Debian    39 KiB
+  libgcc-s1:i386            14.2.0-19         Debian    72 KiB
+  libgl1:i386               1.7.0-1+b2        Debian   111 KiB
+  libllvm19:i386            1:19.1.7-3+b1     Debian  29.4 MiB
+  libstdc++6:i386           14.2.0-19         Debian   732 KiB
+  libvulkan1:i386           1.4.309.0-1       Debian   151 KiB
+  libx11-6:i386             2:1.8.12-1        Debian   845 KiB
+  mesa-vulkan-drivers:i386  25.0.7-2          Debian  11.6 MiB
+  nvidia-driver-libs:i386   590.48.01-1       NVIDIA  98.3 MiB
+  nvidia-kernel-open-dkms   590.48.01-1       NVIDIA  12.0 MiB
+
+──────────────────────────────── System changes ────────────────────────────────
+  i386 architecture  steam, nvidia
+  contrib, non-free  steam
+  NVIDIA repository  nvidia
+
+─────────────────────────────────── Summary ────────────────────────────────────
+ Replace          1  package
+ Install          1  package
+ Dependencies    12  packages
+ System           3  changes
+
+ Download           157 MiB
+ Disk required      512 MiB
