@@ -1,0 +1,3 @@
+# Shipped maintainer keys, git allowed-signers format:
+# <principal> namespaces="git" <key type> <key>
+hmwassim namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB7kk1hK9zfU2CPu0OFKdolrql4Th0JMxVEMYAYsUz0U hmwassim
