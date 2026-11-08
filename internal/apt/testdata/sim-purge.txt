@@ -1,0 +1,15 @@
+NOTE: This is only a simulation!
+      apt-get needs root privileges for real execution.
+      Keep also in mind that locking is deactivated,
+      so don't depend on the relevance to the real current situation!
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following packages were automatically installed and are no longer required:
+  bat fd-find libgit2-1.9 libhttp-parser2.9 libmbedcrypto16 libmbedtls21
+  libmbedx509-7 libssh2-1t64 ripgrep
+Use 'apt autoremove' to remove them.
+The following packages will be REMOVED:
+  dovy-cli-tools*
+0 upgraded, 0 newly installed, 1 to remove and 1 not upgraded.
+Purg dovy-cli-tools [1-1~dovy13]
