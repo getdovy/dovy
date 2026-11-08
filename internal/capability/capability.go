@@ -201,9 +201,8 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	for _, c := range r.Needs() {
 		x.Packages = append(x.Packages, Package(c))
 	}
-	if q := r.Repository; q != nil { // its files are the repository package's
-		x.Packages = append(append(x.Packages, q.Packages...), Package("repo-"+r.Name))
-		x.Files = nil
+	if r.Repo != nil && !r.Repo.Repack { // its source, key and pin are the repository package's
+		x.Packages = append(x.Packages, Package("repo-"+r.Repo.Name))
 	}
 	x.Conflicts = nil
 	for _, c := range r.Conflicts {
@@ -372,33 +371,36 @@ func UsedBy(srcs []Source, host string) *Source {
 
 // RepoSource is the apt source of a vendor repository, with its keyring.
 func RepoSource(q *catalog.Repository, keyring string) string {
-	return fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\nArchitectures: amd64\nSigned-By: %s\n",
-		q.URI, q.Suite, strings.Join(q.Components, " "), keyring)
+	comps := ""
+	if !q.Flat() {
+		comps = "Components: " + strings.Join(q.Components, " ") + "\n"
+	}
+	return fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\n%sArchitectures: amd64\nSigned-By: %s\n",
+		q.URI, q.Suite, comps, keyring)
 }
 
-// RepoPin lets the vendor supply only the recipe's packages (5.10): the host
-// at 1, the packages at 100.
-func RepoPin(q *catalog.Repository) string {
+// RepoPin lets the vendor supply only the packages of the recipes using
+// the repository (5.10): the host at 1, those packages at 100.
+func RepoPin(q *catalog.Repository, pkgs []string) string {
 	h := Host(q.URI)
 	return fmt.Sprintf("Package: *\nPin: origin %s\nPin-Priority: 1\n\nPackage: %s\nPin: origin %s\nPin-Priority: 100\n",
-		h, strings.Join(q.Packages, " "), h)
+		h, strings.Join(pkgs, " "), h)
 }
 
 // Keyring is where a repository package installs its vendor's key.
-func Keyring(recipe string) string { return "/usr/share/keyrings/dovy-" + recipe + ".pgp" }
+func Keyring(repo string) string { return "/usr/share/keyrings/dovy-" + repo + ".pgp" }
 
-// RepoRecipe is dovy-repo-<recipe>: the vendor's key (binary, checked by
-// fingerprint), source, pin, and the recipe's files for the vendor's
-// scripts (2.4, 2.6, 5.10).
-func RepoRecipe(r *catalog.Recipe, key []byte) *catalog.Recipe {
-	q := r.Repository
+// RepoRecipe is dovy-repo-<name>: the vendor's key (binary, checked by
+// fingerprint), source, pin for pkgs (the packages of the recipes using
+// it), and its files for the vendor's scripts (2.4, 2.6, 5.10, ADR 0013).
+func RepoRecipe(q *catalog.Repository, key []byte, pkgs []string) *catalog.Recipe {
 	return &catalog.Recipe{
-		Name: "repo-" + r.Name, Kind: Kind, Version: "1", Maintainer: "dovy",
-		Description: Host(q.URI) + " repository, for " + r.Name,
+		Name: "repo-" + q.Name, Kind: Kind, Version: "1", Maintainer: "dovy",
+		Description: Host(q.URI) + " repository, for dovy recipes",
 		Files: append([]catalog.File{
-			{Path: Keyring(r.Name), Content: string(key)},
-			{Path: "/etc/apt/sources.list.d/dovy-" + r.Name + ".sources", Content: RepoSource(q, Keyring(r.Name))},
-			{Path: "/etc/apt/preferences.d/dovy-" + r.Name + ".pref", Content: RepoPin(q)},
-		}, r.Files...),
+			{Path: Keyring(q.Name), Content: string(key)},
+			{Path: "/etc/apt/sources.list.d/dovy-" + q.Name + ".sources", Content: RepoSource(q, Keyring(q.Name))},
+			{Path: "/etc/apt/preferences.d/dovy-" + q.Name + ".pref", Content: RepoPin(q, pkgs)},
+		}, q.Files...),
 	}
 }

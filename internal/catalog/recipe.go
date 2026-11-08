@@ -37,14 +37,22 @@ type Source struct {
 	SHA256 string `toml:"sha256"`
 }
 
+// Repository is one repositories/<name>.toml: a vendor's apt repository,
+// shared by the recipes that name it (ADR 0013).
 type Repository struct {
-	URI         string   `toml:"uri"`
-	Suite       string   `toml:"suite"`
-	Components  []string `toml:"components"`
-	KeyURL      string   `toml:"key-url"`
-	Fingerprint string   `toml:"fingerprint"`
-	Packages    []string `toml:"packages"`
+	Name         string   `toml:"name"`
+	URI          string   `toml:"uri"`
+	Suite        string   `toml:"suite"`
+	Components   []string `toml:"components"`
+	KeyURL       string   `toml:"key-url"`
+	Fingerprints []string `toml:"fingerprints"`
+	Maintainer   string   `toml:"maintainer"`
+	Repack       bool     `toml:"repack"` // never given to apt; packages repacked (ADR 0014)
+	Files        []File   `toml:"file"`
 }
+
+// Flat reports a flat repository: the suite is a path, with no components.
+func (q *Repository) Flat() bool { return strings.HasSuffix(q.Suite, "/") }
 
 type File struct {
 	Path    string `toml:"path"`
@@ -72,7 +80,8 @@ type Recipe struct {
 	Sources       []Source          `toml:"source"`
 	Install       map[string]string `toml:"install"`
 	Scripts       map[string]string `toml:"scripts"`
-	Repository    *Repository       `toml:"repository"`
+	Repository    string            `toml:"repository"`
+	Repo          *Repository       `toml:"-"` // the repository it names
 	SourcePackage string            `toml:"source-package"`
 	Packages      []string          `toml:"packages"`
 	Backports     bool              `toml:"backports"`
@@ -88,6 +97,10 @@ func (r *Recipe) Package() string {
 	switch r.Kind {
 	case UpstreamBuild, UpstreamBinary, TestingRebuild:
 		return r.Name
+	case VendorRepository:
+		if r.Repo != nil && r.Repo.Repack { // the vendor's package, repacked
+			return r.Name
+		}
 	}
 	return "dovy-" + r.Name
 }
@@ -113,13 +126,15 @@ func (r *Recipe) Needs() []string {
 	return sorted(need)
 }
 
-var scriptNames = map[string]bool{"preinst": true, "postinst": true, "prerm": true, "postrm": true}
+// scriptNames a recipe may replace; config and templates may only be
+// dropped, with their package's debconf questions.
+var scriptNames = map[string]bool{"preinst": true, "postinst": true, "prerm": true, "postrm": true, "config": true, "templates": true}
 
 var (
 	pkgRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*(:i386)?$`)
 	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*$`)
 	hexRe  = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	fprRe  = regexp.MustCompile(`^[0-9A-F]{40}$`)
+	fprRe  = regexp.MustCompile(`^([0-9A-F]{40}|[0-9A-F]{64})$`)
 )
 
 // DebianHas reports which of names are Debian stable packages.
@@ -147,9 +162,23 @@ func Load(dir string, debian DebianHas) (map[string]*Recipe, error) {
 		}
 		rs[r.Name] = r
 	}
+	repos, rerrs := loadRepositories(dir)
+	errs = append(errs, rerrs...)
 	for _, name := range sorted(rs) {
 		for _, e := range check(rs[name]) {
 			errs = append(errs, fmt.Errorf("%s: %s", name, e))
+		}
+		if r := rs[name]; r.Repository != "" {
+			switch r.Repo = repos[r.Repository]; {
+			case r.Repo == nil:
+				errs = append(errs, fmt.Errorf("%s: no repository %q", name, r.Repository))
+			case r.Repo.Repack && len(r.Packages) != 1:
+				errs = append(errs, fmt.Errorf("%s: a repacked repository's recipe names one package, its own", name))
+			case r.Repo.Repack && r.Packages[0] != r.Name:
+				errs = append(errs, fmt.Errorf("%s: repacked package %q must be the recipe's name", name, r.Packages[0]))
+			case !r.Repo.Repack && len(r.Scripts) > 0:
+				errs = append(errs, fmt.Errorf("%s: scripts: only for a repacked repository (ADR 0014)", name))
+			}
 		}
 	}
 	errs = append(errs, crossCheck(rs)...)
@@ -238,24 +267,20 @@ func check(r *Recipe) []string {
 			add("scripts: unknown script %q", k)
 		}
 	}
-	if len(r.Scripts) > 0 && (len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb")) {
+	for _, k := range []string{"config", "templates"} {
+		if v, ok := r.Scripts[k]; ok && v != "" {
+			add("scripts: %s can only be dropped (\"\")", k)
+		}
+	}
+	if len(r.Scripts) > 0 && r.Kind == UpstreamBinary && (len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb")) {
 		add("scripts: only for one vendor .deb source")
 	}
 	for _, f := range r.Files {
-		switch {
-		case r.Kind == VendorRepository:
-			// Only to configure the vendor's own scripts (2.6).
-			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) {
-				add("file %s: a vendor-repository recipe writes only /etc/default/<name>", f.Path)
-			}
-		case !dropIn(f.Path):
+		if !dropIn(f.Path) {
 			add("file %s: only drop-ins under /etc/**/*.d/", f.Path)
 		}
 	}
 	pkgs := append([]string{}, r.Packages...)
-	if r.Repository != nil {
-		pkgs = append(pkgs, r.Repository.Packages...)
-	}
 	for _, n := range pkgs {
 		if !pkgRe.MatchString(n) {
 			add("package %q: an exact package name", n)
@@ -267,7 +292,7 @@ func check(r *Recipe) []string {
 		"source":         len(r.Sources) > 0,
 		"install":        len(r.Install) > 0,
 		"scripts":        len(r.Scripts) > 0,
-		"repository":     r.Repository != nil,
+		"repository":     r.Repository != "",
 		"source-package": r.SourcePackage != "",
 		"packages":       len(r.Packages) > 0,
 		"backports":      r.Backports,
@@ -278,7 +303,7 @@ func check(r *Recipe) []string {
 	allowed := map[string][]string{
 		UpstreamBuild:    {"source", "build.sh"},
 		UpstreamBinary:   {"source", "install", "scripts"},
-		VendorRepository: {"repository", "file"},
+		VendorRepository: {"repository", "packages", "scripts"},
 		TestingRebuild:   {"source-package", "build.sh"},
 		Setup:            {"packages", "backports", "file"},
 		Bundle:           {"members"},
@@ -303,15 +328,8 @@ func check(r *Recipe) []string {
 			add("upstream-binary needs [[source]]")
 		}
 	case VendorRepository:
-		if q := r.Repository; q != nil {
-			if !strings.HasPrefix(q.URI, "https://") || q.Suite == "" || len(q.Components) == 0 || !strings.HasPrefix(q.KeyURL, "https://") || len(q.Packages) == 0 {
-				add("repository: uri and key-url (https), suite, components, packages")
-			}
-			if !fprRe.MatchString(q.Fingerprint) {
-				add("repository: fingerprint must be 40 uppercase hex characters")
-			}
-		} else {
-			add("vendor-repository needs [repository]")
+		if r.Repository == "" || len(r.Packages) == 0 {
+			add("vendor-repository needs repository and packages")
 		}
 	case TestingRebuild:
 		if !has["source-package"] {
@@ -349,17 +367,6 @@ func dropIn(p string) bool {
 // crossCheck: references exist, conflicts go both ways, no dependency cycles.
 func crossCheck(rs map[string]*Recipe) []error {
 	var errs []error
-	hosts := map[string]string{} // one repository recipe per host (5.10)
-	for _, name := range sorted(rs) {
-		if q := rs[name].Repository; q != nil {
-			if u, err := url.Parse(q.URI); err == nil {
-				if o, ok := hosts[u.Host]; ok {
-					errs = append(errs, fmt.Errorf("%s: %s already has a repository recipe: %s", name, u.Host, o))
-				}
-				hosts[u.Host] = name
-			}
-		}
-	}
 	ref := func(from, field, to string) {
 		if rs[to] == nil {
 			errs = append(errs, fmt.Errorf("%s: %s: no recipe %q", from, field, to))
@@ -444,4 +451,66 @@ func sorted[V any](m map[string]V) []string {
 	}
 	sort.Strings(k)
 	return k
+}
+
+// loadRepositories reads and checks repositories/*.toml (ADR 0013).
+func loadRepositories(dir string) (map[string]*Repository, []error) {
+	paths, _ := filepath.Glob(filepath.Join(dir, "repositories", "*.toml"))
+	repos := map[string]*Repository{}
+	hosts := map[string]string{} // one repository per host (5.10)
+	var errs []error
+	for _, p := range paths {
+		base := strings.TrimSuffix(filepath.Base(p), ".toml")
+		q := &Repository{}
+		md, err := toml.DecodeFile(p, q)
+		if err == nil {
+			if u := md.Undecoded(); len(u) > 0 {
+				err = fmt.Errorf("unknown fields: %v", u)
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("repository %s: %w", base, err))
+			continue
+		}
+		var bad []string
+		add := func(f string, a ...any) { bad = append(bad, fmt.Sprintf(f, a...)) }
+		if q.Name != base {
+			add("name %q does not match the file", q.Name)
+		}
+		u, err := url.Parse(q.URI)
+		if err != nil || u.Scheme != "https" || u.Host == "" || !strings.HasPrefix(q.KeyURL, "https://") {
+			add("uri and key-url: https")
+		}
+		if q.Suite == "" || q.Maintainer == "" {
+			add("suite and maintainer required")
+		}
+		if q.Flat() != (len(q.Components) == 0) {
+			add("components: none for a flat suite (ending in /), else at least one")
+		}
+		if len(q.Fingerprints) == 0 {
+			add("fingerprints required")
+		}
+		for _, f := range q.Fingerprints {
+			if !fprRe.MatchString(f) {
+				add("fingerprint %s: 40 or 64 uppercase hex characters", f)
+			}
+		}
+		for _, f := range q.Files {
+			// Only to configure the vendor's own scripts (2.6).
+			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) {
+				add("file %s: only /etc/default/<name>", f.Path)
+			}
+		}
+		if u != nil && u.Host != "" {
+			if o, ok := hosts[u.Host]; ok {
+				add("%s already has a repository: %s", u.Host, o)
+			}
+			hosts[u.Host] = base
+		}
+		for _, b := range bad {
+			errs = append(errs, fmt.Errorf("repository %s: %s", base, b))
+		}
+		repos[base] = q
+	}
+	return repos, errs
 }

@@ -11,7 +11,9 @@ import (
 
 	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/build"
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
+	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
@@ -96,8 +98,13 @@ func (a *app) remove(names []string) int {
 			byRecipe[i.Recipe] = p
 		}
 	}
-	t := &txn{verb: "remove", names: names, versions: map[string]string{}, removing: map[string]string{},
-		down: map[string]bool{}, inst: inst}
+	release, err := deb.Release("/etc/os-release")
+	if err != nil {
+		a.errs.Fail(err.Error(), "unchanged", "dovy runs on Debian stable", "")
+		return exitFailed
+	}
+	t := &txn{verb: "remove", names: names, release: release, versions: map[string]string{}, caps: map[string]bool{},
+		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
 	for _, n := range names {
 		p, ok := byRecipe[n]
 		if !ok {
@@ -119,6 +126,40 @@ func (a *app) remove(names []string) int {
 			}
 		}
 	}
+	// A repository other installed recipes still use is rebuilt without the
+	// removed recipes' packages, from its installed key (ADR 0013).
+	staying := map[string]bool{}
+	for r := range byRecipe {
+		if !contains(names, r) {
+			staying[r] = true
+		}
+	}
+	rebuilt := map[*catalog.Repository]bool{}
+	for _, n := range names {
+		if rs[n] == nil || rs[n].Repo == nil || rs[n].Repo.Repack || rebuilt[rs[n].Repo] {
+			continue
+		}
+		q := rs[n].Repo
+		rebuilt[q] = true
+		pkgs := repoPackages(q, rs, staying)
+		if len(pkgs) == 0 {
+			continue // the last recipe using it: dovy-repo-<name> goes, unused
+		}
+		key, err := os.ReadFile(capability.Keyring(q.Name))
+		if err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "dovy install "+n+" again, which rebuilds its repository", "")
+			return exitFailed
+		}
+		refusal, err := t.repository(q, pkgs, key, "", nil)
+		if err == nil && refusal[0] != "" {
+			err = fmt.Errorf("%s: %s", refusal[0], refusal[1])
+		}
+		if err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "dovy check", "")
+			return exitFailed
+		}
+	}
+
 	tmp, err := os.MkdirTemp("", "dovy-")
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")

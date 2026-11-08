@@ -135,17 +135,52 @@ func (a *app) install(names []string) int {
 		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
 		return exitFailed
 	}
+	using := map[string]bool{} // recipes installed or coming
+	for r := range byRecipe {
+		using[r] = true
+	}
+	users := map[*catalog.Repository][]string{}
 	for _, r := range order {
-		if r.Repository == nil || !contains(t.names, r.Name) {
+		if r.Repo != nil && !r.Repo.Repack && contains(t.names, r.Name) {
+			using[r.Name] = true
+			users[r.Repo] = append(users[r.Repo], r.Name)
+		}
+	}
+	// Repacked repositories (ADR 0014): the package is downloaded and
+	// repacked now, and planned as itself.
+	for _, r := range order {
+		if r.Repo == nil || !r.Repo.Repack || !contains(t.names, r.Name) {
 			continue
 		}
-		refusal, err := t.repository(r, sim)
+		cache, err := build.CacheDir()
+		if err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "set HOME or XDG_CACHE_HOME", "")
+			return exitFailed
+		}
+		d, v, refusal, err := t.repacked(r, cache)
 		if err != nil {
 			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
 			return exitFailed
 		}
 		if refusal[0] != "" {
 			a.errs.Refuse(r.Name, refusal[0], refusal[1])
+			return exitRefused
+		}
+		if t.prebuilt == nil {
+			t.prebuilt = map[string]string{}
+		}
+		t.prebuilt[r.Name] = d
+		t.versions[r.Package()] = v
+		t.system = append(t.system, ui.Pair{Item: capability.Host(r.Repo.URI) + ", repacked", Reason: r.Name})
+	}
+	for q, who := range users {
+		refusal, err := t.repository(q, repoPackages(q, rs, using), nil, strings.Join(who, ", "), sim)
+		if err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
+			return exitFailed
+		}
+		if refusal[0] != "" {
+			a.errs.Refuse(strings.Join(who, " "), refusal[0], refusal[1])
 			return exitRefused
 		}
 	}
