@@ -249,6 +249,62 @@ conflicts = ["firmware"]
 backports = true
 $fw
 EOF
+recipe firefox <<'EOF'
+name = "firefox"
+description = "Mozilla Firefox, from Mozilla's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+
+[repository]
+uri = "https://packages.mozilla.org/apt"
+suite = "mozilla"
+components = ["main"]
+key-url = "https://packages.mozilla.org/apt/repo-signing-key.gpg"
+fingerprint = "35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"
+packages = ["firefox"]
+EOF
+recipe google-chrome <<'EOF'
+name = "google-chrome"
+description = "Google Chrome, from Google's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+
+[repository]
+uri = "https://dl.google.com/linux/chrome/deb/"
+suite = "stable"
+components = ["main"]
+key-url = "https://dl.google.com/linux/linux_signing_key.pub"
+fingerprint = "EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796"
+packages = ["google-chrome-stable"]
+
+[[file]]
+path = "/etc/default/google-chrome"
+content = """
+repo_add_once="false"
+repo_reenable_on_distupgrade="false"
+"""
+EOF
+# badkey: Microsoft's repository with a wrong fingerprint.
+recipe badkey <<'EOF'
+name = "badkey"
+description = "A repository whose key does not match"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+
+[repository]
+uri = "https://packages.microsoft.com/repos/code"
+suite = "stable"
+components = ["main"]
+key-url = "https://packages.microsoft.com/keys/microsoft.asc"
+fingerprint = "0000000000000000000000000000000000000000"
+packages = ["code"]
+EOF
 commit "install recipes"
 T5=catalog-2026.04.10.1
 tag trusted $T5
