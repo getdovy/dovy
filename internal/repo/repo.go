@@ -40,7 +40,10 @@ func Direct(args ...string) error {
 
 // Publish adds debs to the repository in dir, drops the versions they
 // supersede, and rewrites the indexes.
-func Publish(dir string, debs []string, root Root) error {
+func Publish(dir string, debs []string, root Root) error { return Update(dir, debs, nil, root) }
+
+// Update adds debs, removes the named packages, and rewrites the indexes.
+func Update(dir string, debs, remove []string, root Root) error {
 	tmp, err := os.MkdirTemp("", "dovy-repo-")
 	if err != nil {
 		return err
@@ -56,6 +59,12 @@ func Publish(dir string, debs []string, root Root) error {
 			return err
 		}
 		final[name] = p
+	}
+	for _, name := range remove {
+		if p, ok := final[name]; ok {
+			old = append(old, p)
+			delete(final, name)
+		}
 	}
 	for _, p := range debs {
 		name, err := field(p, "Package")
