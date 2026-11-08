@@ -1,6 +1,8 @@
 package build
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,4 +102,57 @@ func TestPfetch(t *testing.T) {
 	want(run("apt-cache", append(opts, "show", "pfetch")...), "Version: 3.1.1-1~dovy13", "X-Dovy-Recipe: pfetch")
 	want(run("apt-cache", append(opts, "policy", "pfetch")...), "Candidate: 3.1.1-1~dovy13")
 	want(run("apt-cache", append(opts, "policy")...), "o=dovy,a=dovy,n=dovy,l=dovy")
+}
+
+func TestRestamp(t *testing.T) {
+	in := "Package: discord\nVersion: 1.0.168\nArchitecture: amd64\nDescription: Chat\n  for friends\n"
+	out, err := Restamp(in, "discord", "1.0.168-1~dovy13", "discord")
+	want := "Package: discord\nVersion: 1.0.168-1~dovy13\nArchitecture: amd64\nDescription: Chat\n  for friends\nX-Dovy-Recipe: discord\n"
+	if err != nil || out != want {
+		t.Errorf("got %v\n%s", err, out)
+	}
+	if _, err := Restamp(in, "slack", "1", "slack"); err == nil {
+		t.Error("other package accepted")
+	}
+}
+
+func TestVendor(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "v", "DEBIAN"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "v", "usr", "bin"), 0o755)
+	os.WriteFile(filepath.Join(dir, "v", "DEBIAN", "control"), []byte("Package: discord\nVersion: 1.0.168\nArchitecture: amd64\nMaintainer: v\nDescription: d\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "v", "DEBIAN", "postinst"), []byte("#!/bin/sh\nrm -rf /home/*/.config/discord/Cache\n"), 0o755)
+	os.WriteFile(filepath.Join(dir, "v", "DEBIAN", "prerm"), []byte("#!/bin/sh\n"), 0o755)
+	os.WriteFile(filepath.Join(dir, "v", "usr", "bin", "discord"), []byte("x"), 0o755)
+	src := filepath.Join(dir, "discord.deb")
+	if b, err := exec.Command("dpkg-deb", "--root-owner-group", "-b", filepath.Join(dir, "v"), src).CombinedOutput(); err != nil {
+		t.Fatalf("%s", b)
+	}
+	b, _ := os.ReadFile(src)
+	h := sha256.Sum256(b)
+	cache := t.TempDir()
+	os.MkdirAll(filepath.Join(cache, "sources"), 0o755)
+	os.WriteFile(filepath.Join(cache, "sources", hex.EncodeToString(h[:])), b, 0o644) // cached: no network
+	r := &catalog.Recipe{Name: "discord", Kind: catalog.UpstreamBinary, Version: "1.0.168",
+		Sources: []catalog.Source{{URL: "https://example.org/discord.deb", SHA256: hex.EncodeToString(h[:])}},
+		Scripts: map[string]string{"postinst": "#!/bin/sh\nupdate-desktop-database -q || true\n", "prerm": ""}}
+	d, err := Recipe(r, 13, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := exec.Command("dpkg-deb", "-f", d, "Version", "X-Dovy-Recipe").Output()
+	if string(f) != "Version: 1.0.168-1~dovy13\nX-Dovy-Recipe: discord\n" {
+		t.Errorf("fields:\n%s", f)
+	}
+	ctl, _ := exec.Command("dpkg-deb", "-I", d).Output()
+	if strings.Contains(string(ctl), "prerm") || !strings.Contains(string(ctl), "postinst") {
+		t.Errorf("scripts:\n%s", ctl)
+	}
+	post, _ := exec.Command("sh", "-c", "dpkg-deb --ctrl-tarfile "+d+" | tar -xO ./postinst").Output()
+	if strings.Contains(string(post), "/home") {
+		t.Error("vendor postinst kept")
+	}
 }
