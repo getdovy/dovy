@@ -76,6 +76,9 @@ func TestLoadRefuses(t *testing.T) {
 		"revision":         {map[string]string{"steam": top("revision = -1\n")}, "revision: 1 or more"},
 		"install outside":  {map[string]string{"steam": steam + "\n[install]\n\"/etc/x\" = \"x\"\n"}, "under /usr/"},
 		"install dotdot":   {map[string]string{"steam": steam + "\n[install]\n\"/usr/bin/x\" = \"../x\"\n"}, "without .."},
+		"arch suffix":      {map[string]string{"x": setup(`packages = ["libgl1:arm64"]`)}, "exact package name"},
+		"script name":      {map[string]string{"steam": steam + "\n[scripts]\nconfig = \"\"\n"}, `unknown script "config"`},
+		"script tarball":   {map[string]string{"steam": steam + "\n[scripts]\npostinst = \"\"\n"}, "only for one vendor .deb"},
 		"wrong kind field": {map[string]string{"steam": top("members = [\"steam\"]\n")}, "members: not used by kind"},
 		"empty setup":      {map[string]string{"x": setup("")}, "setup needs packages"},
 		"missing depend":   {map[string]string{"steam": strings.Replace(steam, "requires", "depends = [\"nvidia\"]\nrequires", 1)}, `no recipe "nvidia"`},
@@ -115,5 +118,17 @@ func TestPackageNames(t *testing.T) {
 		if got := (&Recipe{Name: "x", Kind: kind}).Package(); got != want {
 			t.Errorf("%s: got %s, want %s", kind, got, want)
 		}
+	}
+}
+
+func TestNeeds(t *testing.T) {
+	r := &Recipe{Requires: []string{"components"}, Backports: true, Packages: []string{"steam-installer", "libgl1-mesa-dri:i386"}}
+	if got := strings.Join(r.Needs(), " "); got != "backports components i386" {
+		t.Errorf("got %s", got)
+	}
+	x := "name = \"x\"\ndescription = \"d\"\nkind = \"setup\"\nversion = \"1\"\nmaintainer = \"m\"\ndebian = [13]\npackages = [\"libgl1-mesa-dri:i386\"]\n"
+	rs, err := Load(catalogDir(t, map[string]string{"x": x}), noDebian)
+	if err != nil || rs["x"].Needs()[0] != "i386" {
+		t.Errorf("i386 package: %v", err)
 	}
 }

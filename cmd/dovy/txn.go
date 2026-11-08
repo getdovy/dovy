@@ -11,6 +11,7 @@ import (
 
 	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/build"
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/fetch"
@@ -46,30 +47,34 @@ type txn struct {
 	down     map[string]bool   // packages the plan downgrades (4.6)
 	opts     []string          // apt options while a new source is not installed
 	inst     map[string]pkgInfo
-	system   []ui.Pair         // System changes (12.2)
-	kept     []ui.Pair         // Kept (12.2)
-	notes    []*catalog.Recipe // per-user steps after install
-	leftover string            // notice after remove (4.7)
+	system   []ui.Pair                            // System changes (12.2)
+	kept     []ui.Pair                            // Kept (12.2)
+	keepFor  func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
+	notes    []*catalog.Recipe                    // per-user steps after install
+	leftover string                               // notice after remove (4.7)
 
-	tmp     string
-	actions []apt.Action
-	unused  map[string]bool
+	tmp      string
+	actions  []apt.Action
+	unused   map[string]bool
+	final    map[string]bool // purged after the transaction: i386 packages, then dovy-i386 (4.8)
+	warnings []string        // repeated in Notices (12.4)
 }
 
 // sourceOpts keeps only the source and list options, for root's download.
 func (t *txn) sourceOpts() []string {
 	var o []string
 	for i := 0; i+1 < len(t.opts); i += 2 {
-		if strings.HasPrefix(t.opts[i+1], "Dir::Etc::SourceParts=") || strings.HasPrefix(t.opts[i+1], "Dir::State::Lists=") {
+		if v := t.opts[i+1]; strings.HasPrefix(v, "Dir::Etc::SourceParts=") || strings.HasPrefix(v, "Dir::State::Lists=") || strings.HasPrefix(v, "APT::Architectures") {
 			o = append(o, t.opts[i], t.opts[i+1])
 		}
 	}
 	return o
 }
 
-// withSource sets up a temporary apt configuration with one more source, as
-// the user: the system's sources and lists, plus src (8.3.3).
-func (t *txn) withSource(name, src string) error {
+// withConfig sets up a temporary apt configuration as the user: the
+// system's sources and lists, with files changed ("" removes one) and i386
+// added if asked, so apt can plan before anything changes (8.3.3).
+func (t *txn) withConfig(files map[string]string, i386 bool) error {
 	dir := filepath.Join(t.tmp, "apt")
 	parts, lists := filepath.Join(dir, "parts"), filepath.Join(dir, "lists")
 	for _, d := range []string{parts, filepath.Join(lists, "partial"), filepath.Join(dir, "cache", "archives", "partial")} {
@@ -80,16 +85,24 @@ func (t *txn) withSource(name, src string) error {
 	if err := exec.Command("sh", "-c", `cp /etc/apt/sources.list.d/* "$1"/ 2>/dev/null; cp /var/lib/apt/lists/*_* "$2"/ 2>/dev/null; true`, "sh", parts, lists).Run(); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(parts, name), []byte(src), 0o644); err != nil {
-		return err
+	for name, text := range files {
+		p := filepath.Join(parts, name)
+		if text == "" {
+			os.Remove(p)
+		} else if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			return err
+		}
 	}
 	t.opts = []string{
 		"-o", "Dir::Etc::SourceParts=" + parts, "-o", "Dir::State::Lists=" + lists,
 		"-o", "Dir::Cache=" + filepath.Join(dir, "cache"), "-o", "Debug::NoLocking=1",
 	}
+	if i386 {
+		t.opts = append(t.opts, "-o", "APT::Architectures::=amd64", "-o", "APT::Architectures::=i386")
+	}
 	out, err := exec.Command("apt-get", append(append([]string{"-q"}, t.opts...), "update")...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("apt-get update with %s: %s", name, strings.TrimSpace(string(out)))
+		return fmt.Errorf("apt-get update with dovy's capabilities: %s", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -128,6 +141,16 @@ func (t *txn) simulate(stubs []string) error {
 		}
 	}
 	t.actions = apt.Parse(out)
+	asked := len(t.request)
+	if err := t.leaveI386(stubs); err != nil {
+		return err
+	}
+	if len(t.request) != asked {
+		if out, err = apt.Simulate(t.opts, t.args(stubs)...); err != nil {
+			return err
+		}
+		t.actions = apt.Parse(out)
+	}
 	return nil
 }
 
@@ -250,9 +273,23 @@ func (a *app) run(t *txn) int {
 	what := strings.Join(t.names, " ")
 	again := "dovy " + t.verb + " " + what
 
-	// Resolve packages: apt simulates with control-only stubs.
+	// Resolve packages: apt simulates with control-only stubs. A vendor
+	// .deb's dependencies are its own: it is fetched and repacked now, into
+	// the user's cache, and planned as itself.
 	var stubs []string
 	for _, r := range t.build {
+		if build.IsDeb(r) {
+			cache, err := build.CacheDir()
+			if err == nil {
+				var d string
+				if d, err = build.Recipe(r, t.release, cache); err == nil {
+					stubs = append(stubs, d)
+					continue
+				}
+			}
+			a.errs.Fail(err.Error(), "unchanged", "check the network, then: "+again, "")
+			return exitFailed
+		}
 		stage := filepath.Join(t.tmp, "stage", r.Name)
 		if err := os.MkdirAll(stage, 0o755); err != nil {
 			a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
@@ -277,6 +314,18 @@ func (a *app) run(t *txn) int {
 	if len(surprises) > 0 {
 		a.errs.Refuse(what, "apt would change packages beyond the plan", strings.Join(surprises, ", "))
 		return exitRefused
+	}
+	if t.keepFor != nil {
+		gone := map[string]bool{}
+		for _, x := range t.actions {
+			if x.Op == "Remv" || x.Op == "Purg" {
+				gone[x.Name] = true
+			}
+		}
+		for p := range t.final {
+			gone[p] = true
+		}
+		t.kept = append(t.keepFor(gone), t.kept...)
 	}
 
 	// Plan, confirm (12.1, 12.2).
@@ -374,7 +423,7 @@ func (a *app) run(t *txn) int {
 		}
 		if len(debian) > 0 {
 			args := append(append(append([]string{"install", "--download-only", "--allow-downgrades", "-y"}, apt.Options...), t.sourceOpts()...), pkgArgs(debian)...)
-			if err := apt.Run(logf, a.aptLine(nil), args...); err != nil {
+			if err := apt.Run(logf, a.aptLine(nil, nil), args...); err != nil {
 				return fail(err.Error(), "unchanged", "check the network, then: "+again)
 			}
 		}
@@ -422,7 +471,7 @@ func (a *app) run(t *txn) int {
 		}
 	}
 	update := func() error {
-		return apt.Run(logf, a.aptLine(nil), append([]string{"update"}, apt.Options...)...)
+		return apt.Run(logf, a.aptLine(nil, nil), append([]string{"update"}, apt.Options...)...)
 	}
 	if len(debs) > 0 || len(t.caps) > 0 {
 		if err := update(); err != nil {
@@ -437,7 +486,7 @@ func (a *app) run(t *txn) int {
 		}
 		sort.Strings(caps)
 		sort.Strings(names)
-		if err := apt.Run(logf, a.aptLine(versions), append(append([]string{"install", "-y"}, apt.Options...), caps...)...); err != nil {
+		if err := apt.Run(logf, a.aptLine(versions, nil), append(append([]string{"install", "-y"}, apt.Options...), caps...)...); err != nil {
 			return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
 		}
 		// Capabilities come and go with the recipes that need them (5.1).
@@ -455,14 +504,55 @@ func (a *app) run(t *txn) int {
 		}
 	}
 	sort.Strings(dovy)
-	args := append(dovy, t.request...)
+	args := dovy
+	for _, r := range t.request {
+		if !t.final[pkgName(r)] {
+			args = append(args, r)
+		}
+	}
+	skip := map[string]bool{}
+	for p := range t.caps {
+		skip[p] = true
+	}
+	for p := range t.final {
+		skip[p] = true
+	}
 	out, err := apt.Simulate(nil, append([]string{"install", "--allow-downgrades"}, args...)...)
-	if err != nil || !same(apt.Parse(out), t.actions, t.caps) {
+	if err != nil || !same(apt.Parse(out), t.actions, skip) {
 		clear()
 		return fail("apt's plan changed after the build", "unchanged; built packages kept in "+repo.Dir, again)
 	}
-	if err := apt.Run(logf, a.aptLine(versions), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...); err != nil {
+	if code := a.preconfigure(t, debs, logf); code != exitOK {
+		clear()
+		return code
+	}
+	if err := apt.Run(logf, a.aptLine(versions, &t.warnings), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...); err != nil {
 		return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
+	}
+
+	// i386 packages, then dovy-i386, whose postrm removes the architecture
+	// once none is left (4.8).
+	if len(t.final) > 0 {
+		var i386 []string
+		known, _ := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\n").Output()
+		for _, p := range strings.Fields(string(known)) {
+			if t.final[p] && p != capability.I386 {
+				i386 = append(i386, p)
+			}
+		}
+		sort.Strings(i386)
+		for _, step := range [][]string{i386, {capability.I386}} {
+			if len(step) == 0 {
+				continue
+			}
+			pargs := append(append([]string{"purge", "-y", "--allow-remove-essential"}, apt.Options...), step...)
+			if err := apt.Run(logf, a.aptLine(versions, &t.warnings), pargs...); err != nil {
+				return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
+			}
+		}
+		if err := update(); err != nil {
+			a.out.Say(ui.Yellow, "Warning:", "apt-get update: "+err.Error())
+		}
 	}
 
 	// Packages named only to pick a version stay automatic (3.4).
@@ -508,6 +598,13 @@ func (a *app) run(t *txn) int {
 	}
 	clear()
 	a.out.Blank()
+	if len(t.warnings) > 0 {
+		a.out.Rule(ui.Yellow, "Notices")
+		for _, w := range t.warnings {
+			a.out.Say(ui.Yellow, "Warning:", w)
+		}
+		a.out.Blank()
+	}
 	a.notices(t.notes, versions)
 	if t.leftover != "" {
 		a.out.Rule(ui.Yellow, "Notices")
@@ -519,5 +616,34 @@ func (a *app) run(t *txn) int {
 		verb = "removed"
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Done.")+" "+strings.Join(t.names, ", ")+" "+verb+".")
+	return exitOK
+}
+
+// preconfigure asks packages' questions before the install, on the terminal
+// (8.11): dpkg-preconfigure on the exact .debs. The install then runs
+// non-interactively with the answers.
+func (a *app) preconfigure(t *txn, built []string, logf *os.File) int {
+	debs := append([]string{}, built...)
+	for _, x := range t.actions {
+		if x.Op != "Inst" || t.versions[x.Name] != "" {
+			continue
+		}
+		name, arch, _ := strings.Cut(x.Name, ":")
+		if arch == "" {
+			arch = "*"
+		}
+		v := strings.ReplaceAll(x.Version, ":", "%3a")
+		m, _ := filepath.Glob(filepath.Join("/var/cache/apt/archives", name+"_"+v+"_"+arch+".deb"))
+		debs = append(debs, m...)
+	}
+	if len(debs) == 0 {
+		return exitOK
+	}
+	cmd := exec.Command("sudo", append([]string{"--", "dpkg-preconfigure"}, debs...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, logf
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(logf, "dpkg-preconfigure: "+err.Error())
+		t.warnings = append(t.warnings, "package questions: "+err.Error()+"; defaults used")
+	}
 	return exitOK
 }

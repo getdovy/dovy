@@ -25,7 +25,7 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 `
 
 func TestBackportsSource(t *testing.T) {
-	text, present, err := BackportsSource(ParseDeb822(deb822), "trixie")
+	text, present, err := BackportsSource(ParseDeb822(deb822), "trixie", nil)
 	want := `Types: deb
 URIs: http://deb.debian.org/debian
 Suites: trixie-backports
@@ -38,20 +38,20 @@ Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
 
 	list := "deb [arch=amd64 signed-by=/k.gpg] https://mirror.example/debian trixie main non-free\n" +
 		"# deb http://x trixie-backports main\n"
-	text, _, _ = BackportsSource(ParseList(list), "trixie")
+	text, _, _ = BackportsSource(ParseList(list), "trixie", nil)
 	if !strings.Contains(text, "URIs: https://mirror.example/debian\n") || !strings.Contains(text, "Components: main non-free\n") || !strings.Contains(text, "Signed-By: /k.gpg\n") {
 		t.Errorf("one-line:\n%s", text)
 	}
 
-	_, present, _ = BackportsSource(ParseList("deb http://x/debian trixie main\ndeb http://x/debian trixie-backports main\n"), "trixie")
+	_, present, _ = BackportsSource(ParseList("deb http://x/debian trixie main\ndeb http://x/debian trixie-backports main\n"), "trixie", nil)
 	if !present {
 		t.Error("existing backports not seen")
 	}
-	if _, _, err := BackportsSource(ParseList("deb http://x/ubuntu noble main\n"), "trixie"); err == nil {
+	if _, _, err := BackportsSource(ParseList("deb http://x/ubuntu noble main\n"), "trixie", nil); err == nil {
 		t.Error("no Debian source accepted")
 	}
 	disabled := strings.Replace(deb822, "Types: deb\n# http", "Types: deb\nEnabled: no\n# http", 1)
-	if _, _, err := BackportsSource(ParseDeb822(disabled), "trixie"); err == nil {
+	if _, _, err := BackportsSource(ParseDeb822(disabled), "trixie", nil); err == nil {
 		t.Error("disabled entry used")
 	}
 }
@@ -84,5 +84,62 @@ func TestExpand(t *testing.T) {
 	}
 	if x := Expand(rs["mesa"], rs, "trixie"); len(x.Files) != 0 || strings.Join(x.Conflicts, " ") != "dovy-mesa-backports" {
 		t.Errorf("stable half %+v", x)
+	}
+}
+
+func TestComponents(t *testing.T) {
+	text, added := ComponentsSource(ParseDeb822(deb822), "trixie")
+	want := `Types: deb
+URIs: http://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: non-free
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+Types: deb
+URIs: http://deb.debian.org/debian-security
+Suites: trixie-security
+Components: contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+`
+	if text != want || strings.Join(added, " ") != "non-free contrib non-free-firmware" {
+		t.Errorf("got %v\n%s", added, text)
+	}
+	full := "deb http://x/debian trixie main contrib non-free non-free-firmware\n"
+	if text, added := ComponentsSource(ParseList(full), "trixie"); text != "" || len(added) != 0 {
+		t.Errorf("complete: %v %q", added, text)
+	}
+	bp, _, _ := BackportsSource(ParseDeb822(deb822), "trixie", []string{"non-free", "contrib"})
+	if !strings.Contains(bp, "Components: main contrib non-free-firmware non-free\n") {
+		t.Errorf("backports with added components:\n%s", bp)
+	}
+}
+
+func TestSystemSkipsDovy(t *testing.T) {
+	etc := t.TempDir()
+	os.MkdirAll(filepath.Join(etc, "sources.list.d"), 0o755)
+	os.WriteFile(filepath.Join(etc, "sources.list.d", "dovy-backports.sources"), []byte(deb822), 0o644)
+	if got := System(etc); len(got) != 0 {
+		t.Errorf("read dovy's own source: %d", len(got))
+	}
+}
+
+func TestI386(t *testing.T) {
+	r := I386Recipe()
+	if r.Package() != I386 || !strings.Contains(r.Scripts["postinst"], "dpkg --add-architecture i386") ||
+		!strings.Contains(r.Scripts["postrm"], "grep -qx i386") {
+		t.Errorf("%+v", r)
+	}
+	if Content(r) == Content(ComponentsRecipe("")) {
+		t.Error("content not distinct")
+	}
+}
+
+func TestPinI386(t *testing.T) {
+	if got := Pin([]string{"libgl1-mesa-dri", "libgl1-mesa-dri:i386", "libgbm1"}, "trixie"); got != "Package: libgl1-mesa-dri libgbm1\nPin: release n=trixie-backports\nPin-Priority: 500\n" {
+		t.Errorf("got %q", got)
+	}
+	r := &catalog.Recipe{Name: "steam", Kind: catalog.Setup, Requires: []string{"components"}, Packages: []string{"steam-installer", "libgl1-mesa-dri:i386"}}
+	if x := Expand(r, nil, "trixie"); strings.Join(x.Packages, " ") != "steam-installer libgl1-mesa-dri:i386 dovy-components dovy-i386" {
+		t.Errorf("depends %v", x.Packages)
 	}
 }

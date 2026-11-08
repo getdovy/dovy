@@ -54,7 +54,7 @@ func NoLongerRequired(out string) []string {
 	in := false
 	for _, l := range strings.Split(out, "\n") {
 		switch {
-		case strings.HasPrefix(l, "The following packages were automatically installed and are no longer required"):
+		case strings.HasPrefix(l, "The following package") && strings.Contains(l, "no longer required"): // one or many
 			in = true
 		case in && strings.HasPrefix(l, "  "):
 			names = append(names, strings.Fields(l)...)
@@ -237,11 +237,11 @@ func Lines(r io.Reader, log io.Writer, fn func(string)) {
 }
 
 // Run runs `sudo apt-get args` and streams its output, merged, to fn and log.
-// Packages' questions still reach the user's terminal on stdin. The status
+// Questions were asked before, by dpkg-preconfigure (8.11). The status
 // channel is fd 3, a copy of stdout made after sudo (which closes fds above
 // 2): apt closes the status fd for maintainer scripts, so it must not be 1.
 func Run(log io.Writer, fn func(string), args ...string) error {
-	cmd := exec.Command("sudo", append([]string{"--", "sh", "-c", `exec apt-get "$@" 3>&1`, "apt-get"}, args...)...)
+	cmd := exec.Command("sudo", append([]string{"--", "env", "DEBIAN_FRONTEND=noninteractive", "sh", "-c", `exec apt-get "$@" 3>&1`, "apt-get"}, args...)...)
 	cmd.Stdin = os.Stdin
 	r, w := io.Pipe()
 	cmd.Stdout, cmd.Stderr = w, w
