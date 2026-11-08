@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 )
 
@@ -144,5 +145,19 @@ func TestStub(t *testing.T) {
 		Files: []catalog.File{{Path: "/etc/x.d/a.conf", Content: "a"}}}
 	if _, err := Build(r, "1-1~dovy13", t.TempDir(), t.TempDir()); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestControlCapability(t *testing.T) {
+	r := capability.BackportsRecipe("x")
+	c := Control(r, "1-1~dovy13", 1)
+	for _, w := range []string{"Package: dovy-backports\n", "Architecture: all\n", "X-Dovy-Capability: backports\n"} {
+		if !strings.Contains(c, w) {
+			t.Errorf("lacks %q:\n%s", w, c)
+		}
+	}
+	m := &catalog.Recipe{Name: "mesa", Kind: catalog.Setup, Packages: []string{"libgbm1"}, Conflicts: []string{"dovy-mesa-backports"}}
+	if c := Control(m, "1-1~dovy13", 1); !strings.Contains(c, "Depends: libgbm1\nConflicts: dovy-mesa-backports\n") {
+		t.Errorf("relations:\n%s", c)
 	}
 }

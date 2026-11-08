@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/fetch"
@@ -24,7 +25,7 @@ func CacheDir() (string, error) {
 
 // Buildable reports whether this dovy builds r's kind.
 func Buildable(r *catalog.Recipe) bool {
-	return r.Kind == catalog.UpstreamBinary || r.Kind == catalog.Setup
+	return r.Kind == catalog.UpstreamBinary || r.Kind == catalog.Setup || r.Kind == capability.Kind
 }
 
 // Recipe downloads, unpacks and packs r for a Debian release; it returns
