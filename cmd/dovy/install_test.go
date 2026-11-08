@@ -139,3 +139,12 @@ func TestUnused(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+func TestPkgName(t *testing.T) {
+	for in, want := range map[string]string{"mesa-libgallium/trixie-backports": "mesa-libgallium", "linux-base=4.12.1": "linux-base",
+		"libgl1-mesa-dri:i386-": "libgl1-mesa-dri:i386", "dovy-mesa-": "dovy-mesa"} {
+		if got := pkgName(in); got != want {
+			t.Errorf("%s: got %s", in, got)
+		}
+	}
+}

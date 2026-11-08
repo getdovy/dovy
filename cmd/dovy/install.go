@@ -86,7 +86,7 @@ func (a *app) install(names []string) int {
 	}
 	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
-	needBackports := []string{}
+	needs := map[string][]string{} // capability → recipes
 	for _, r := range order {
 		if !build.Buildable(r) {
 			a.errs.Refuse(r.Name, "kind "+r.Kind+" is not built yet", "")
@@ -106,8 +106,10 @@ func (a *app) install(names []string) int {
 		if r.UserNotes != "" {
 			t.notes = append(t.notes, r)
 		}
+		for _, c := range r.Needs() {
+			needs[c] = append(needs[c], r.Name)
+		}
 		if r.Backports {
-			needBackports = append(needBackports, r.Name)
 			for _, p := range r.Packages {
 				t.request = append(t.request, p+"/"+codename+"-backports")
 			}
@@ -125,26 +127,11 @@ func (a *app) install(names []string) int {
 	defer os.RemoveAll(tmp)
 	t.tmp = tmp
 
-	// Capability: Debian backports, built from the system's sources (5.4).
-	if len(needBackports) > 0 {
-		if _, ok := inst[capability.Backports]; !ok {
-			src, present, err := capability.BackportsSource(capability.System("/etc/apt"), codename)
-			if err != nil {
-				a.errs.Fail(err.Error(), "unchanged", "add Debian's "+codename+" source to /etc/apt", "")
-				return exitFailed
-			}
-			c := capability.BackportsRecipe(src)
-			t.build = append([]*catalog.Recipe{c}, t.build...)
-			t.versions[c.Package()] = deb.Version(c, release)
-			t.caps[c.Package()] = true
-			if !present {
-				if err := t.withSource("dovy-backports.sources", src); err != nil {
-					a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
-					return exitFailed
-				}
-			}
-			t.system = append(t.system, ui.Pair{Item: "Debian backports", Reason: strings.Join(needBackports, ", ")})
-		}
+	// Capabilities, built from the system's sources (5.1–5.4).
+	t.inst = inst
+	if err := t.capabilities(needs, codename); err != nil {
+		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
+		return exitFailed
 	}
 
 	// Pairs: the other half goes, and its backports packages return to
@@ -269,7 +256,7 @@ func pkgArgs(m map[string]string) []string {
 
 // aptLine shows one line of apt-get output: tidy verbs from the status
 // channel, fetch lines, and anything else a package prints (12.3).
-func (a *app) aptLine(versions map[string]string) func(string) {
+func (a *app) aptLine(versions map[string]string, warnings *[]string) func(string) {
 	last := ""
 	say := func(color, verb, text string) {
 		if verb+text != last { // apt repeats some lines
@@ -314,6 +301,9 @@ func (a *app) aptLine(versions map[string]string) func(string) {
 				say(ui.Red, "Error:", f.Text)
 			}
 			return
+		}
+		if strings.HasPrefix(l, "debconf: ") && warnings != nil {
+			*warnings = append(*warnings, l) // a question answered with its default (8.11)
 		}
 		if !apt.Chatter(l) {
 			a.out.Raw(l)

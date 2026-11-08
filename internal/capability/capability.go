@@ -17,8 +17,18 @@ import (
 // Kind marks a capability package: X-Dovy-Capability, not X-Dovy-Recipe.
 const Kind = "capability"
 
-// Backports is the backports capability's package.
-const Backports = "dovy-backports"
+// Capability packages.
+const (
+	Backports  = "dovy-backports"
+	Components = "dovy-components"
+	I386       = "dovy-i386"
+)
+
+// Package names a capability's package: backports → dovy-backports.
+func Package(name string) string { return "dovy-" + name }
+
+// nonFree is what the components capability adds when missing (5.3).
+var nonFree = []string{"contrib", "non-free", "non-free-firmware"}
 
 // Source is one apt source entry.
 type Source struct {
@@ -100,6 +110,9 @@ func System(etc string) []Source {
 	files, _ := filepath.Glob(filepath.Join(etc, "sources.list.d", "*"))
 	sort.Strings(files)
 	for _, f := range files {
+		if strings.HasPrefix(filepath.Base(f), "dovy-") {
+			continue // dovy's own capabilities: computed, not read
+		}
 		b, err := os.ReadFile(f)
 		if err != nil {
 			continue
@@ -117,7 +130,7 @@ func System(etc string) []Source {
 // BackportsSource is the source dovy-backports ships: the system's Debian
 // mirror, components and key, with the backports suite (5.4). present is
 // true when the system already has backports; then dovy ships nothing (3.6).
-func BackportsSource(srcs []Source, codename string) (text string, present bool, err error) {
+func BackportsSource(srcs []Source, codename string, extra []string) (text string, present bool, err error) {
 	var main *Source
 	for i, s := range srcs {
 		for _, suite := range s.Suites {
@@ -135,7 +148,13 @@ func BackportsSource(srcs []Source, codename string) (text string, present bool,
 		return "", false, fmt.Errorf("no Debian source for %s in /etc/apt", codename)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s-backports\nComponents: %s\n", main.URIs[0], codename, strings.Join(main.Components, " "))
+	comps := append([]string{}, main.Components...)
+	for _, c := range extra {
+		if !contains(comps, c) {
+			comps = append(comps, c)
+		}
+	}
+	fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s-backports\nComponents: %s\n", main.URIs[0], codename, strings.Join(comps, " "))
 	if main.SignedBy != "" {
 		fmt.Fprintf(&b, "Signed-By: %s\n", main.SignedBy)
 	}
@@ -168,7 +187,9 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 			Path:    "/etc/apt/preferences.d/dovy-" + r.Name + ".pref",
 			Content: Pin(r.Packages, codename),
 		})
-		x.Packages = append(x.Packages, Backports)
+	}
+	for _, c := range r.Needs() {
+		x.Packages = append(x.Packages, Package(c))
 	}
 	x.Conflicts = nil
 	for _, c := range r.Conflicts {
@@ -179,9 +200,16 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	return &x
 }
 
-// Pin keeps exactly these packages on backports (5.4, 5.5).
+// Pin keeps exactly these packages on backports (5.4, 5.5). An :i386
+// package is pinned by its name, which covers both architectures.
 func Pin(pkgs []string, codename string) string {
-	return fmt.Sprintf("Package: %s\nPin: release n=%s-backports\nPin-Priority: 500\n", strings.Join(pkgs, " "), codename)
+	var names []string
+	for _, p := range pkgs {
+		if n := strings.TrimSuffix(p, ":i386"); !contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	return fmt.Sprintf("Package: %s\nPin: release n=%s-backports\nPin-Priority: 500\n", strings.Join(names, " "), codename)
 }
 
 // Codename reads VERSION_CODENAME from an os-release file.
@@ -198,4 +226,111 @@ func Codename(osRelease string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%s: no VERSION_CODENAME", osRelease)
+}
+
+// ComponentsSource adds, for each Debian entry of the system (stable,
+// updates, security), only the components it lacks (5.3). added lists them;
+// text is empty when nothing is missing.
+func ComponentsSource(srcs []Source, codename string) (text string, added []string) {
+	var b strings.Builder
+	seen := map[string]bool{}
+	for _, s := range srcs {
+		var suites []string
+		for _, suite := range s.Suites {
+			if suite == codename || suite == codename+"-updates" || suite == codename+"-security" {
+				suites = append(suites, suite)
+			}
+		}
+		if len(suites) == 0 || len(s.URIs) == 0 {
+			continue
+		}
+		var missing []string
+		for _, c := range nonFree {
+			if !contains(s.Components, c) {
+				missing = append(missing, c)
+				if !seen[c] {
+					seen[c] = true
+					added = append(added, c)
+				}
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\n", s.URIs[0], strings.Join(suites, " "), strings.Join(missing, " "))
+		if s.SignedBy != "" {
+			fmt.Fprintf(&b, "Signed-By: %s\n", s.SignedBy)
+		}
+	}
+	return b.String(), added
+}
+
+// ComponentsRecipe is dovy-components; source is empty when nothing is
+// missing.
+func ComponentsRecipe(source string) *catalog.Recipe {
+	r := &catalog.Recipe{
+		Name: "components", Kind: Kind, Version: "1", Maintainer: "dovy",
+		Description: "Debian contrib, non-free and non-free-firmware, for dovy recipes",
+	}
+	if source != "" {
+		r.Files = []catalog.File{{Path: "/etc/apt/sources.list.d/dovy-components.sources", Content: source}}
+	} else {
+		r.Description = "Debian components, already configured on this system"
+	}
+	return r
+}
+
+// I386Added records that dovy, not the user, added i386 (3.6, 5.2).
+const I386Added = "/var/lib/dovy/i386-added"
+
+// I386Recipe is dovy-i386: its scripts add i386 if missing and remove it
+// only if dovy added it and no i386 package is left (5.2, 4.8).
+func I386Recipe() *catalog.Recipe {
+	return &catalog.Recipe{
+		Name: "i386", Kind: Kind, Version: "1", Maintainer: "dovy",
+		Description: "i386 architecture, for dovy recipes",
+		Scripts: map[string]string{
+			"postinst": `#!/bin/sh
+set -e
+if [ "$1" = configure ] && ! dpkg --print-foreign-architectures | grep -qx i386; then
+	dpkg --add-architecture i386
+	mkdir -p /var/lib/dovy
+	touch ` + I386Added + `
+fi
+`,
+			"postrm": `#!/bin/sh
+set -e
+if [ "$1" = remove ] && [ -e ` + I386Added + ` ] &&
+	! dpkg-query -W -f '${Architecture}\n' | grep -qx i386; then
+	dpkg --remove-architecture i386
+	rm -f ` + I386Added + `
+fi
+`,
+		},
+	}
+}
+
+// Content is what a capability package ships, to compare with the installed
+// one: files and scripts.
+func Content(r *catalog.Recipe) string {
+	var b strings.Builder
+	for _, f := range r.Files {
+		b.WriteString(f.Path + "\n" + f.Content)
+	}
+	for _, k := range []string{"preinst", "postinst", "prerm", "postrm"} {
+		b.WriteString(k + "\n" + r.Scripts[k])
+	}
+	return b.String()
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

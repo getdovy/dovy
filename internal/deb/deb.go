@@ -3,6 +3,8 @@ package deb
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -91,6 +93,14 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 	if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "control"), []byte(Control(r, version, size)), 0o644); err != nil {
 		return "", err
 	}
+	for name, body := range r.Scripts {
+		if body == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(stage, "DEBIAN", name), []byte(body), 0o755); err != nil {
+			return "", err
+		}
+	}
 	if c := conffiles(r, stage); c != "" {
 		if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "conffiles"), []byte(c), 0o644); err != nil {
 			return "", err
@@ -118,6 +128,7 @@ func Control(r *catalog.Recipe, version string, size int64) string {
 	}
 	field := "X-Dovy-Recipe"
 	if r.Kind == capability.Kind {
+		rel += "X-Dovy-Content: " + ContentHash(r) + "\n"
 		field = "X-Dovy-Capability"
 	}
 	return fmt.Sprintf(`Package: %s
@@ -176,4 +187,11 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		err = os.Chmod(dst, mode) // umask may have narrowed it
 	}
 	return err
+}
+
+// ContentHash identifies what a capability package ships, so dovy rebuilds
+// it only when that changes.
+func ContentHash(r *catalog.Recipe) string {
+	h := sha256.Sum256([]byte(capability.Content(r)))
+	return hex.EncodeToString(h[:6])
 }

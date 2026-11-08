@@ -17,24 +17,24 @@ import (
 
 // pkgInfo is an installed package as dpkg knows it.
 type pkgInfo struct {
-	Version, Recipe, Capability string
-	Size                        int64 // bytes
+	Version, Recipe, Capability, Content string
+	Size                                 int64 // bytes
 }
 
 // dpkgInstalled lists installed packages with dovy's field (3.3).
 func dpkgInstalled() (map[string]pkgInfo, error) {
-	out, err := exec.Command("dpkg-query", "-W", "-f", "${Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${db:Status-Abbrev}\n").Output()
+	out, err := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${X-Dovy-Content}\t${db:Status-Abbrev}\n").Output()
 	if err != nil {
 		return nil, fmt.Errorf("dpkg-query: %w", err)
 	}
 	m := map[string]pkgInfo{}
 	for _, l := range strings.Split(string(out), "\n") {
 		f := strings.Split(l, "\t")
-		if len(f) != 6 || !strings.HasPrefix(f[5], "ii") {
+		if len(f) != 7 || !strings.HasPrefix(f[6], "ii") {
 			continue
 		}
 		kib, _ := strconv.ParseInt(f[2], 10, 64)
-		m[f[0]] = pkgInfo{f[1], f[3], f[4], kib * 1024}
+		m[f[0]] = pkgInfo{f[1], f[3], f[4], f[5], kib * 1024}
 	}
 	return m, nil
 }
@@ -150,11 +150,7 @@ func (a *app) remove(names []string) int {
 		}
 	}
 
-	removing := map[string]bool{}
-	for p := range t.removing {
-		removing[p] = true
-	}
-	t.kept = a.kept(names, rs, inst, removing)
+	t.keepFor = func(gone map[string]bool) []ui.Pair { return a.kept(names, rs, inst, gone) }
 	var notes []string
 	for _, n := range names {
 		if r := rs[n]; r != nil && r.UserNotes != "" {
