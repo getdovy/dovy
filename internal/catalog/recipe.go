@@ -5,6 +5,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -241,7 +242,13 @@ func check(r *Recipe) []string {
 		add("scripts: only for one vendor .deb source")
 	}
 	for _, f := range r.Files {
-		if !dropIn(f.Path) {
+		switch {
+		case r.Kind == VendorRepository:
+			// Only to configure the vendor's own scripts (2.6).
+			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) {
+				add("file %s: a vendor-repository recipe writes only /etc/default/<name>", f.Path)
+			}
+		case !dropIn(f.Path):
 			add("file %s: only drop-ins under /etc/**/*.d/", f.Path)
 		}
 	}
@@ -271,7 +278,7 @@ func check(r *Recipe) []string {
 	allowed := map[string][]string{
 		UpstreamBuild:    {"source", "build.sh"},
 		UpstreamBinary:   {"source", "install", "scripts"},
-		VendorRepository: {"repository"},
+		VendorRepository: {"repository", "file"},
 		TestingRebuild:   {"source-package", "build.sh"},
 		Setup:            {"packages", "backports", "file"},
 		Bundle:           {"members"},
@@ -342,6 +349,17 @@ func dropIn(p string) bool {
 // crossCheck: references exist, conflicts go both ways, no dependency cycles.
 func crossCheck(rs map[string]*Recipe) []error {
 	var errs []error
+	hosts := map[string]string{} // one repository recipe per host (5.10)
+	for _, name := range sorted(rs) {
+		if q := rs[name].Repository; q != nil {
+			if u, err := url.Parse(q.URI); err == nil {
+				if o, ok := hosts[u.Host]; ok {
+					errs = append(errs, fmt.Errorf("%s: %s already has a repository recipe: %s", name, u.Host, o))
+				}
+				hosts[u.Host] = name
+			}
+		}
+	}
 	ref := func(from, field, to string) {
 		if rs[to] == nil {
 			errs = append(errs, fmt.Errorf("%s: %s: no recipe %q", from, field, to))

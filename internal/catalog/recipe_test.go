@@ -132,3 +132,25 @@ func TestNeeds(t *testing.T) {
 		t.Errorf("i386 package: %v", err)
 	}
 }
+
+func TestVendorRepository(t *testing.T) {
+	repo := func(name, uri, extra string) string {
+		return "name = \"" + name + "\"\ndescription = \"d\"\nkind = \"vendor-repository\"\nversion = \"1\"\nmaintainer = \"m\"\ndebian = [13]\n" + extra +
+			"\n[repository]\nuri = \"" + uri + "\"\nsuite = \"stable\"\ncomponents = [\"main\"]\nkey-url = \"https://x/k\"\nfingerprint = \"EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796\"\npackages = [\"p\"]\n"
+	}
+	file := func(path string) string { return "[[file]]\npath = \"" + path + "\"\ncontent = \"x\"\n" }
+	ok := map[string]string{"google-chrome": repo("google-chrome", "https://dl.google.com/linux/chrome/deb/", file("/etc/default/google-chrome"))}
+	if _, err := Load(catalogDir(t, ok), noDebian); err != nil {
+		t.Errorf("valid: %v", err)
+	}
+	bad := map[string]map[string]string{
+		"/etc/default/google-chrome": {"x": repo("x", "https://a.example/", file("/etc/apt/sources.list.d/x.list"))},
+		"already has a repository":   {"a": repo("a", "https://dl.google.com/a", ""), "b": repo("b", "https://dl.google.com/b", "")},
+	}
+	want := map[string]string{"/etc/default/google-chrome": "writes only /etc/default/<name>", "already has a repository": "dl.google.com already has a repository recipe"}
+	for k, rs := range bad {
+		if _, err := Load(catalogDir(t, rs), noDebian); err == nil || !strings.Contains(err.Error(), want[k]) {
+			t.Errorf("%s: %v", k, err)
+		}
+	}
+}
