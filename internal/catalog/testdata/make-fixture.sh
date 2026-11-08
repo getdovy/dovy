@@ -61,14 +61,18 @@ kind = "vendor-repository"
 version = "145.0"
 maintainer = "test"
 debian = [13]
-
-[repository]
+repository = "mozilla"
+packages = ["firefox"]
+EOF
+mkdir -p "$tmp/repo/repositories"
+cat >"$tmp/repo/repositories/mozilla.toml" <<'EOF'
+name = "mozilla"
 uri = "https://packages.mozilla.org/apt"
 suite = "mozilla"
 components = ["main"]
 key-url = "https://packages.mozilla.org/apt/repo-signing-key.gpg"
-fingerprint = "35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"
-packages = ["firefox"]
+fingerprints = ["35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"]
+maintainer = "test"
 EOF
 g add -A
 commit "three recipes"
@@ -249,37 +253,36 @@ conflicts = ["firmware"]
 backports = true
 $fw
 EOF
-recipe firefox <<'EOF'
-name = "firefox"
-description = "Mozilla Firefox, from Mozilla's repository"
+repository() { mkdir -p "$tmp/repo/repositories" && cat >"$tmp/repo/repositories/$1.toml"; }
+vendor() { # name repository package
+  recipe "$1" <<EOF
+name = "$1"
+description = "$1, from a vendor repository"
 kind = "vendor-repository"
 version = "1"
 maintainer = "test"
 debian = [13]
-
-[repository]
+repository = "$2"
+packages = ["$3"]
+EOF
+}
+repository mozilla <<'EOF'
+name = "mozilla"
 uri = "https://packages.mozilla.org/apt"
 suite = "mozilla"
 components = ["main"]
 key-url = "https://packages.mozilla.org/apt/repo-signing-key.gpg"
-fingerprint = "35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"
-packages = ["firefox"]
-EOF
-recipe google-chrome <<'EOF'
-name = "google-chrome"
-description = "Google Chrome, from Google's repository"
-kind = "vendor-repository"
-version = "1"
+fingerprints = ["35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3"]
 maintainer = "test"
-debian = [13]
-
-[repository]
+EOF
+repository google-chrome <<'EOF'
+name = "google-chrome"
 uri = "https://dl.google.com/linux/chrome/deb/"
 suite = "stable"
 components = ["main"]
 key-url = "https://dl.google.com/linux/linux_signing_key.pub"
-fingerprint = "EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796"
-packages = ["google-chrome-stable"]
+fingerprints = ["EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796"]
+maintainer = "test"
 
 [[file]]
 path = "/etc/default/google-chrome"
@@ -288,23 +291,195 @@ repo_add_once="false"
 repo_reenable_on_distupgrade="false"
 """
 EOF
-# badkey: Microsoft's repository with a wrong fingerprint.
-recipe badkey <<'EOF'
-name = "badkey"
-description = "A repository whose key does not match"
-kind = "vendor-repository"
-version = "1"
+repository brave <<'EOF'
+name = "brave"
+uri = "https://brave-browser-apt-release.s3.brave.com/"
+suite = "stable"
+components = ["main"]
+key-url = "https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg"
+# Brave's key file holds three keys (2022, 2025, 2025).
+fingerprints = [
+  "DBF1A116C220B8C7164F98230686B78420038257",
+  "47D32A74E9A9E013A4B4926C68D513D36A73CD96",
+  "B2A3DCA350E67256740DF904DE4EC67BE4B0DCA0",
+]
 maintainer = "test"
-debian = [13]
 
-[repository]
+# Brave's postinst and daily cron add Brave's own source unless these say
+# not to; dovy's repository package already provides it (2.6).
+[[file]]
+path = "/etc/default/brave-browser"
+content = """
+repo_add_once="false"
+repo_reenable_on_distupgrade="false"
+"""
+
+[[file]]
+path = "/etc/default/brave-origin"
+content = """
+repo_add_once="false"
+repo_reenable_on_distupgrade="false"
+"""
+EOF
+# badkey: Microsoft's repository with a wrong fingerprint.
+repository microsoft <<'EOF'
+name = "microsoft"
 uri = "https://packages.microsoft.com/repos/code"
 suite = "stable"
 components = ["main"]
 key-url = "https://packages.microsoft.com/keys/microsoft.asc"
-fingerprint = "0000000000000000000000000000000000000000"
-packages = ["code"]
+fingerprints = ["0000000000000000000000000000000000000000"]
+maintainer = "test"
 EOF
+repository librewolf <<'EOF'
+name = "librewolf"
+uri = "https://repo.librewolf.net"
+suite = "librewolf"
+components = ["main"]
+key-url = "https://repo.librewolf.net/pubkey.gpg"
+fingerprints = ["662E3CDD6FE329002D0CA5BB40339DD82B12EF16"]
+maintainer = "test"
+EOF
+repository floorp <<'EOF'
+name = "floorp"
+uri = "https://ppa.floorp.app/amd64"
+suite = "./"
+key-url = "https://ppa.floorp.app/KEY.gpg"
+fingerprints = ["A8C20FCDD57739941A813D5D8F64DCC7C806D572"]
+maintainer = "test"
+EOF
+repository mullvad <<'EOF'
+name = "mullvad"
+uri = "https://repository.mullvad.net/deb/stable"
+suite = "stable"
+components = ["main"]
+key-url = "https://repository.mullvad.net/deb/mullvad-keyring.asc"
+fingerprints = ["A1198702FC3E0A09A9AE5B75D5A1D4F266DE8DDF"]
+maintainer = "test"
+EOF
+repository opera <<'EOF'
+name = "opera"
+uri = "https://deb.opera.com/opera-stable/"
+suite = "stable"
+components = ["non-free"]
+key-url = "https://deb.opera.com/archive.key"
+fingerprints = ["6C86BE214648376680CA957B11EE8C00B693A745"]
+maintainer = "test"
+# Opera's postinst makes apt trust Opera's keys for every repository
+# (trusted.gpg.d, a daily cron job): never given to apt, repacked instead.
+repack = true
+EOF
+recipe librewolf <<'EOF'
+name = "librewolf"
+description = "LibreWolf browser, from LibreWolf's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+repository = "librewolf"
+packages = ["librewolf"]
+EOF
+recipe floorp <<'EOF'
+name = "floorp"
+description = "Floorp browser, from Floorp's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+repository = "floorp"
+packages = ["floorp"]
+EOF
+recipe mullvad-browser <<'EOF'
+name = "mullvad-browser"
+description = "Mullvad Browser, from Mullvad's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+repository = "mullvad"
+packages = ["mullvad-browser"]
+EOF
+recipe helium-bin <<'EOF'
+name = "helium-bin"
+description = "Helium browser, from Helium's .deb"
+kind = "upstream-binary"
+version = "0.21.1.1"
+maintainer = "test"
+debian = [13]
+
+[[source]]
+url = "https://github.com/imputnet/helium-linux/releases/download/0.21.1.1/helium-bin_0.21.1.1-1_amd64.deb"
+sha256 = "679a88ea17e969653e09504a1d01bce155f4e3d2ff366d2571d6d00b985457cc"
+
+# Helium's scripts chown files already root's, refresh caches Debian's
+# triggers refresh, and install an AppArmor profile Debian does not need.
+[scripts]
+postinst = ""
+postrm = ""
+EOF
+recipe opera-stable <<'EOF'
+name = "opera-stable"
+description = "Opera browser, repacked from Opera's repository"
+kind = "vendor-repository"
+version = "139.0.6053.38"
+maintainer = "test"
+debian = [13]
+repository = "opera"
+packages = ["opera-stable"]
+
+# Opera's postinst, without the cron job, keys and source (ADR 0014).
+# Opera's prerm (alternatives) and postrm are kept; its debconf question
+# about adding a source goes with config and templates.
+[scripts]
+postinst = """
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+	chown root:root /usr/lib/x86_64-linux-gnu/opera-stable/opera_sandbox
+	chmod 4755 /usr/lib/x86_64-linux-gnu/opera-stable/opera_sandbox
+	update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/opera 120 \\
+		--slave /usr/share/man/man1/x-www-browser.1.gz x-www-browser.1.gz /usr/share/man/man1/opera.1.gz
+	update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/opera 120 \\
+		--slave /usr/share/man/man1/gnome-www-browser.1.gz gnome-www-browser.1.gz /usr/share/man/man1/opera.1.gz
+fi
+"""
+config = ""
+templates = ""
+EOF
+recipe opera-gx-stable <<'EOF'
+name = "opera-gx-stable"
+description = "Opera GX browser, repacked from Opera's repository"
+kind = "vendor-repository"
+version = "139.0.6053.42"
+maintainer = "test"
+debian = [13]
+repository = "opera"
+packages = ["opera-gx-stable"]
+
+# Opera's postinst, without the cron job, keys and source (ADR 0014).
+# Opera's prerm (alternatives) and postrm are kept; its debconf question
+# about adding a source goes with config and templates.
+[scripts]
+postinst = """
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+	chown root:root /usr/lib/x86_64-linux-gnu/opera-gx-stable/opera_sandbox
+	chmod 4755 /usr/lib/x86_64-linux-gnu/opera-gx-stable/opera_sandbox
+	update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/opera-gx 120 \\
+		--slave /usr/share/man/man1/x-www-browser.1.gz x-www-browser.1.gz /usr/share/man/man1/opera-gx.1.gz
+	update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser /usr/bin/opera-gx 120 \\
+		--slave /usr/share/man/man1/gnome-www-browser.1.gz gnome-www-browser.1.gz /usr/share/man/man1/opera-gx.1.gz
+fi
+"""
+config = ""
+templates = ""
+EOF
+vendor firefox mozilla firefox
+vendor google-chrome google-chrome google-chrome-stable
+vendor brave-browser brave brave-browser
+vendor brave-origin brave brave-origin
+vendor badkey microsoft code
 commit "install recipes"
 T5=catalog-2026.04.10.1
 tag trusted $T5
