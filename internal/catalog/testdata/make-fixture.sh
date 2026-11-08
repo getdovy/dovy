@@ -193,6 +193,62 @@ debian = [13]
 backports = true
 packages = ["linux-image-amd64", "linux-headers-amd64"]
 EOF
+recipe steam <<'EOF'
+name = "steam"
+description = "Valve's Steam client, from Debian contrib"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+requires = ["components"]
+packages = ["steam-installer", "mesa-vulkan-drivers", "libgl1-mesa-dri:i386", "libglx-mesa0:i386", "mesa-vulkan-drivers:i386"]
+EOF
+recipe discord <<'EOF'
+name = "discord"
+description = "Discord chat, from Discord's .deb"
+kind = "upstream-binary"
+version = "1.0.168"
+maintainer = "test"
+debian = [13]
+
+[[source]]
+url = "https://dl.discordapp.net/apps/linux/1.0.168/discord-1.0.168.deb"
+sha256 = "93d43ad090825b9edcacfb3841506ea51e7040c60d93a9e377d0caca547bea28"
+
+[scripts]
+postinst = """
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+	systemctl reload apparmor 2>/dev/null || true
+	update-desktop-database -q /usr/share/applications 2>/dev/null || true
+fi
+"""
+EOF
+fw='packages = ["firmware-misc-nonfree", "firmware-amd-graphics", "firmware-intel-graphics", "firmware-iwlwifi", "firmware-realtek", "firmware-atheros", "firmware-mediatek", "firmware-brcm80211", "firmware-intel-sound"]'
+recipe firmware <<EOF
+name = "firmware"
+description = "Common hardware firmware from Debian stable"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+requires = ["components"]
+conflicts = ["firmware-backports"]
+$fw
+EOF
+recipe firmware-backports <<EOF
+name = "firmware-backports"
+description = "Common hardware firmware from Debian backports"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+requires = ["components"]
+conflicts = ["firmware"]
+backports = true
+$fw
+EOF
 commit "install recipes"
 T5=catalog-2026.04.10.1
 tag trusted $T5
