@@ -49,6 +49,10 @@ func TestParse(t *testing.T) {
 }
 
 func TestNoLongerRequired(t *testing.T) {
+	one := "The following package was automatically installed and is no longer required:\n  dovy-backports\nUse 'apt autoremove' to remove it.\n"
+	if got := NoLongerRequired(one); len(got) != 1 || got[0] != "dovy-backports" {
+		t.Errorf("one package: %v", got)
+	}
 	got := NoLongerRequired(fixture(t, "sim-purge.txt"))
 	if len(got) != 9 || got[0] != "bat" || got[8] != "ripgrep" {
 		t.Errorf("got %v", got)
