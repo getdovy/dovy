@@ -54,6 +54,13 @@ func TestPublish(t *testing.T) {
 	if !strings.Contains(string(rel), want) || !strings.Contains(string(rel), "Label: dovy\n") {
 		t.Errorf("Release:\n%s", rel)
 	}
+	if err := Update(dir, nil, []string{"fzf"}, Direct); err != nil {
+		t.Fatal(err)
+	}
+	pkgs, _ = os.ReadFile(filepath.Join(dir, "Packages"))
+	if debs, _ := filepath.Glob(filepath.Join(dir, "*.deb")); len(debs) != 1 || strings.Contains(string(pkgs), "fzf") {
+		t.Errorf("fzf not dropped: %v\n%s", debs, pkgs)
+	}
 	if left, _ := filepath.Glob(filepath.Join(dir, ".*")); len(left) != 0 {
 		t.Errorf("leftovers: %v", left)
 	}

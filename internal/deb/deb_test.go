@@ -100,3 +100,49 @@ func TestStageRefuses(t *testing.T) {
 		t.Errorf("missing: %v", err)
 	}
 }
+
+func TestSetup(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	r := &catalog.Recipe{
+		Name: "zram", Kind: catalog.Setup, Version: "1", Maintainer: "test",
+		Description: "Compressed swap in RAM", Packages: []string{"systemd-zram-generator"},
+		Files: []catalog.File{{Path: "/etc/systemd/zram-generator.conf.d/00-dovy.conf", Content: "\n[zram0]\n"}},
+	}
+	stage := t.TempDir()
+	if err := Stage(r, "", stage); err != nil {
+		t.Fatal(err)
+	}
+	deb, err := Build(r, Version(r, 13), stage, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(deb) != "dovy-zram_1-1~dovy13_all.deb" {
+		t.Errorf("name %s", deb)
+	}
+	b, _ := exec.Command("dpkg-deb", "-f", deb, "Depends", "Architecture").Output()
+	if !strings.Contains(string(b), "Depends: systemd-zram-generator") || !strings.Contains(string(b), "Architecture: all") {
+		t.Errorf("fields:\n%s", b)
+	}
+	b, _ = exec.Command("dpkg-deb", "--ctrl-tarfile", deb).Output()
+	if !strings.Contains(string(b), "/etc/systemd/zram-generator.conf.d/00-dovy.conf") {
+		t.Error("conffiles missing")
+	}
+	b, _ = exec.Command("dpkg-deb", "--fsys-tarfile", deb).Output()
+	if !strings.Contains(string(b), "[zram0]\n") || strings.Contains(string(b), "\n\n[zram0]") {
+		t.Error("drop-in content")
+	}
+}
+
+// A plan's stub holds only the control file.
+func TestStub(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	r := &catalog.Recipe{Name: "zram", Kind: catalog.Setup, Version: "1", Maintainer: "test", Description: "d",
+		Files: []catalog.File{{Path: "/etc/x.d/a.conf", Content: "a"}}}
+	if _, err := Build(r, "1-1~dovy13", t.TempDir(), t.TempDir()); err != nil {
+		t.Error(err)
+	}
+}

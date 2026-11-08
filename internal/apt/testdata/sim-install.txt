@@ -1,0 +1,53 @@
+NOTE: This is only a simulation!
+      apt-get needs root privileges for real execution.
+      Keep also in mind that locking is deactivated,
+      so don't depend on the relevance to the real current situation!
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  bat fd-find krb5-locales libcom-err2 libgit2-1.9 libgssapi-krb5-2
+  libhttp-parser2.9 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0
+  libmbedcrypto16 libmbedtls21 libmbedx509-7 libssh2-1t64 ripgrep
+Suggested packages:
+  krb5-doc krb5-user
+The following NEW packages will be installed:
+  bat dovy-cli-tools fd-find krb5-locales libcom-err2 libgit2-1.9
+  libgssapi-krb5-2 libhttp-parser2.9 libk5crypto3 libkeyutils1 libkrb5-3
+  libkrb5support0 libmbedcrypto16 libmbedtls21 libmbedx509-7 libssh2-1t64
+  ripgrep
+0 upgraded, 17 newly installed, 0 to remove and 1 not upgraded.
+Inst krb5-locales (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [all])
+Inst libkrb5support0 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Inst libcom-err2 (1.47.2-3+b12 Debian:13.7/stable [amd64])
+Inst libk5crypto3 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Inst libkeyutils1 (1.6.3-6 Debian:13.7/stable [amd64])
+Inst libkrb5-3 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Inst libgssapi-krb5-2 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Inst libhttp-parser2.9 (2.9.4-6+b2 Debian:13.7/stable [amd64])
+Inst libmbedcrypto16 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Inst libmbedx509-7 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Inst libmbedtls21 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Inst libssh2-1t64 (1.11.1-1+deb13u2 Debian:13.7/stable [amd64])
+Inst libgit2-1.9 (1.9.0+ds-2+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Inst bat (0.25.0-2+b2 Debian:13.7/stable [amd64])
+Inst fd-find (10.2.0-1+b5 Debian:13.7/stable [amd64])
+Inst ripgrep (14.1.1-1+b4 Debian:13.7/stable [amd64])
+Inst dovy-cli-tools (1-1~dovy13 local-deb [all])
+Conf krb5-locales (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [all])
+Conf libkrb5support0 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Conf libcom-err2 (1.47.2-3+b12 Debian:13.7/stable [amd64])
+Conf libk5crypto3 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Conf libkeyutils1 (1.6.3-6 Debian:13.7/stable [amd64])
+Conf libkrb5-3 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Conf libgssapi-krb5-2 (1.21.3-5+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Conf libhttp-parser2.9 (2.9.4-6+b2 Debian:13.7/stable [amd64])
+Conf libmbedcrypto16 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Conf libmbedx509-7 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Conf libmbedtls21 (3.6.6-0.1~deb13u1 Debian:13.7/stable [amd64])
+Conf libssh2-1t64 (1.11.1-1+deb13u2 Debian:13.7/stable [amd64])
+Conf libgit2-1.9 (1.9.0+ds-2+deb13u1 Debian:13.7/stable, Debian-Security:13/stable-security [amd64])
+Conf bat (0.25.0-2+b2 Debian:13.7/stable [amd64])
+Conf fd-find (10.2.0-1+b5 Debian:13.7/stable [amd64])
+Conf ripgrep (14.1.1-1+b4 Debian:13.7/stable [amd64])
+Conf dovy-cli-tools (1-1~dovy13 local-deb [all])

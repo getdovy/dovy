@@ -115,3 +115,11 @@ func TestConfirm(t *testing.T) {
 		}
 	}
 }
+
+func TestBytes(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 B", 1023: "1023 B", 421888: "412 KiB", 4404019: "4.2 MiB", 3 << 30: "3.0 GiB"} {
+		if got := Bytes(n); got != want {
+			t.Errorf("%d: got %s, want %s", n, got, want)
+		}
+	}
+}

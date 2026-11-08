@@ -17,6 +17,14 @@ import (
 // Arch is the only architecture for now (principles 6.6).
 const Arch = "amd64"
 
+// ArchOf is the package architecture: setup packages hold no binaries.
+func ArchOf(r *catalog.Recipe) string {
+	if r.Kind == catalog.Setup {
+		return "all"
+	}
+	return Arch
+}
+
 // Release reads the Debian major release from an os-release file.
 func Release(osRelease string) (int, error) {
 	f, err := os.Open(osRelease)
@@ -38,8 +46,18 @@ func Version(r *catalog.Recipe, release int) string {
 	return fmt.Sprintf("%s-%d~dovy%d", r.Version, r.Rev(), release)
 }
 
-// Stage copies r's [install] files from src into stage.
+// Stage copies r's [install] files from src into stage, and writes its
+// [[file]] drop-ins.
 func Stage(r *catalog.Recipe, src, stage string) error {
+	for _, f := range r.Files {
+		p := filepath.Join(stage, f.Path)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(strings.TrimPrefix(f.Content, "\n")), 0o644); err != nil {
+			return err
+		}
+	}
 	for dst, from := range r.Install {
 		p := filepath.Join(src, from)
 		fi, err := os.Lstat(p)
@@ -72,10 +90,15 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 	if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "control"), []byte(Control(r, version, size)), 0o644); err != nil {
 		return "", err
 	}
+	if c := conffiles(r, stage); c != "" {
+		if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "conffiles"), []byte(c), 0o644); err != nil {
+			return "", err
+		}
+	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return "", err
 	}
-	deb := filepath.Join(out, fmt.Sprintf("%s_%s_%s.deb", r.Package(), version, Arch))
+	deb := filepath.Join(out, fmt.Sprintf("%s_%s_%s.deb", r.Package(), version, ArchOf(r)))
 	cmd := exec.Command("dpkg-deb", "--root-owner-group", "--build", stage, deb)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("dpkg-deb: %s", strings.TrimSpace(string(b)))
@@ -85,16 +108,31 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 
 // Control is the package's control file; size is in KiB.
 func Control(r *catalog.Recipe, version string, size int64) string {
+	var deps string
+	if len(r.Packages) > 0 {
+		deps = "Depends: " + strings.Join(r.Packages, ", ") + "\n"
+	}
 	return fmt.Sprintf(`Package: %s
 Version: %s
 Architecture: %s
 Maintainer: %s
 Installed-Size: %d
-Section: misc
+%sSection: misc
 Priority: optional
 X-Dovy-Recipe: %s
 Description: %s
-`, r.Package(), version, Arch, r.Maintainer, size, r.Name, r.Description)
+`, r.Package(), version, ArchOf(r), r.Maintainer, size, deps, r.Name, r.Description)
+}
+
+// conffiles lists the staged files dpkg keeps when the user edits them (8.5).
+func conffiles(r *catalog.Recipe, stage string) string {
+	var b strings.Builder
+	for _, f := range r.Files {
+		if _, err := os.Stat(filepath.Join(stage, f.Path)); err == nil && strings.HasPrefix(f.Path, "/etc/") {
+			b.WriteString(f.Path + "\n")
+		}
+	}
+	return b.String()
 }
 
 // installedSize sums file sizes under dir in KiB, as dpkg counts them.

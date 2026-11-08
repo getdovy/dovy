@@ -1,0 +1,116 @@
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  bat fd-find libgit2-1.9 libhttp-parser2.9 libmbedcrypto16 libmbedtls21
+  libmbedx509-7 libssh2-1t64 ripgrep
+The following NEW packages will be installed:
+  bat dovy-cli-tools fd-find libgit2-1.9 libhttp-parser2.9 libmbedcrypto16
+  libmbedtls21 libmbedx509-7 libssh2-1t64 ripgrep
+dlstatus:2:19.8814:Retrieving file 2 of 10
+0 upgraded, 10 newly installed, 0 to remove and 1 not upgraded.
+Need to get 4979 kB/6414 kB of archives.
+After this operation, 18.0 MB of additional disk space will be used.
+Get:1 /tmp/dovy-cli-tools_1-1~dovy13_all.deb dovy-cli-tools all 1-1~dovy13 [684 B]
+dlstatus:2:19.8814:Retrieving file 2 of 10
+dlstatus:3:21.8899:Retrieving file 3 of 10
+dlstatus:3:21.8899:Retrieving file 3 of 10
+dlstatus:3:21.8899:Retrieving file 3 of 10
+dlstatus:3:21.8899:Retrieving file 3 of 10
+Get:2 http://deb.debian.org/debian trixie/main amd64 libhttp-parser2.9 amd64 2.9.4-6+b2 [21.2 kB]
+dlstatus:3:21.9921:Retrieving file 3 of 10
+dlstatus:4:24.1543:Retrieving file 4 of 10
+dlstatus:4:24.1543:Retrieving file 4 of 10
+Get:3 http://deb.debian.org/debian trixie/main amd64 libmbedcrypto16 amd64 3.6.6-0.1~deb13u1 [365 kB]
+dlstatus:4:24.3101:Retrieving file 4 of 10
+dlstatus:5:30.7098:Retrieving file 5 of 10
+Get:4 http://deb.debian.org/debian trixie/main amd64 libmbedx509-7 amd64 3.6.6-0.1~deb13u1 [155 kB]
+dlstatus:5:30.7271:Retrieving file 5 of 10
+dlstatus:6:34.6413:Retrieving file 6 of 10
+Get:5 http://deb.debian.org/debian trixie/main amd64 libmbedtls21 amd64 3.6.6-0.1~deb13u1 [246 kB]
+dlstatus:6:34.8837:Retrieving file 6 of 10
+dlstatus:7:39.7050:Retrieving file 7 of 10
+Get:6 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1+deb13u2 [245 kB]
+dlstatus:7:39.9093:Retrieving file 7 of 10
+dlstatus:8:44.7639:Retrieving file 8 of 10
+Get:7 http://deb.debian.org/debian trixie/main amd64 libgit2-1.9 amd64 1.9.0+ds-2+deb13u1 [556 kB]
+dlstatus:8:44.9172:Retrieving file 8 of 10
+dlstatus:9:53.6958:Retrieving file 9 of 10
+Get:8 http://deb.debian.org/debian trixie/main amd64 bat amd64 0.25.0-2+b2 [2339 kB]
+dlstatus:9:53.9382:Retrieving file 9 of 10
+dlstatus:10:84.8705:Retrieving file 10 of 10
+Get:9 http://deb.debian.org/debian trixie/main amd64 fd-find amd64 10.2.0-1+b5 [1053 kB]
+dlstatus:10:85.0851:Retrieving file 10 of 10
+dlstatus:10:100.0000:Retrieving file 10 of 10
+debconf: unable to initialize frontend: Dialog
+debconf: (TERM is not set, so the dialog frontend is not usable.)
+debconf: falling back to frontend: Readline
+debconf: unable to initialize frontend: Readline
+debconf: (This frontend requires a controlling tty.)
+debconf: falling back to frontend: Teletype
+debconf: unable to initialize frontend: Teletype
+debconf: (This frontend requires a controlling tty.)
+debconf: falling back to frontend: Noninteractive
+Fetched 4979 kB in 1s (5938 kB/s)
+pmstatus:dpkg-exec:0.0000:Running dpkg
+pmstatus:libhttp-parser2.9:0.0000:Preparing libhttp-parser2.9 (amd64)
+pmstatus:libhttp-parser2.9:2.4390:Unpacking libhttp-parser2.9 (amd64)
+pmstatus:libhttp-parser2.9:4.8780:Installing libhttp-parser2.9 (amd64)
+pmstatus:libmbedcrypto16:4.8780:Preparing libmbedcrypto16 (amd64)
+pmstatus:libmbedcrypto16:7.3171:Unpacking libmbedcrypto16 (amd64)
+pmstatus:libmbedcrypto16:9.7561:Installing libmbedcrypto16 (amd64)
+pmstatus:libmbedx509-7:9.7561:Preparing libmbedx509-7 (amd64)
+pmstatus:libmbedx509-7:12.1951:Unpacking libmbedx509-7 (amd64)
+pmstatus:libmbedx509-7:14.6341:Installing libmbedx509-7 (amd64)
+pmstatus:libmbedtls21:14.6341:Preparing libmbedtls21 (amd64)
+pmstatus:libmbedtls21:17.0732:Unpacking libmbedtls21 (amd64)
+pmstatus:libmbedtls21:19.5122:Installing libmbedtls21 (amd64)
+pmstatus:libssh2-1t64:19.5122:Preparing libssh2-1t64 (amd64)
+pmstatus:libssh2-1t64:21.9512:Unpacking libssh2-1t64 (amd64)
+pmstatus:libssh2-1t64:24.3902:Installing libssh2-1t64 (amd64)
+pmstatus:libgit2-1.9:24.3902:Preparing libgit2-1.9 (amd64)
+pmstatus:libgit2-1.9:26.8293:Unpacking libgit2-1.9 (amd64)
+pmstatus:libgit2-1.9:29.2683:Installing libgit2-1.9 (amd64)
+pmstatus:bat:29.2683:Preparing bat (amd64)
+pmstatus:bat:31.7073:Unpacking bat (amd64)
+pmstatus:bat:34.1463:Installing bat (amd64)
+pmstatus:fd-find:34.1463:Preparing fd-find (amd64)
+pmstatus:fd-find:36.5854:Unpacking fd-find (amd64)
+pmstatus:fd-find:39.0244:Installing fd-find (amd64)
+pmstatus:ripgrep:39.0244:Preparing ripgrep (amd64)
+pmstatus:ripgrep:41.4634:Unpacking ripgrep (amd64)
+pmstatus:ripgrep:43.9024:Installing ripgrep (amd64)
+pmstatus:dovy-cli-tools:43.9024:Preparing dovy-cli-tools (amd64)
+pmstatus:dovy-cli-tools:46.3415:Unpacking dovy-cli-tools (amd64)
+pmstatus:dovy-cli-tools:48.7805:Installing dovy-cli-tools (amd64)
+pmstatus:dpkg-exec:48.7805:Running dpkg
+pmstatus:fd-find:48.7805:Preparing to configure fd-find (amd64)
+pmstatus:fd-find:51.2195:Configuring fd-find (amd64)
+pmstatus:fd-find:53.6585:Installed fd-find (amd64)
+pmstatus:ripgrep:53.6585:Preparing to configure ripgrep (amd64)
+pmstatus:ripgrep:56.0976:Configuring ripgrep (amd64)
+pmstatus:ripgrep:58.5366:Installed ripgrep (amd64)
+pmstatus:libmbedcrypto16:58.5366:Preparing to configure libmbedcrypto16 (amd64)
+pmstatus:libmbedcrypto16:60.9756:Configuring libmbedcrypto16 (amd64)
+pmstatus:libmbedcrypto16:63.4146:Installed libmbedcrypto16 (amd64)
+pmstatus:libssh2-1t64:63.4146:Preparing to configure libssh2-1t64 (amd64)
+pmstatus:libssh2-1t64:65.8537:Configuring libssh2-1t64 (amd64)
+pmstatus:libssh2-1t64:68.2927:Installed libssh2-1t64 (amd64)
+pmstatus:libhttp-parser2.9:68.2927:Preparing to configure libhttp-parser2.9 (amd64)
+pmstatus:libhttp-parser2.9:70.7317:Configuring libhttp-parser2.9 (amd64)
+pmstatus:libhttp-parser2.9:73.1707:Installed libhttp-parser2.9 (amd64)
+pmstatus:libmbedx509-7:73.1707:Preparing to configure libmbedx509-7 (amd64)
+pmstatus:libmbedx509-7:75.6098:Configuring libmbedx509-7 (amd64)
+pmstatus:libmbedx509-7:78.0488:Installed libmbedx509-7 (amd64)
+pmstatus:libmbedtls21:78.0488:Preparing to configure libmbedtls21 (amd64)
+pmstatus:libmbedtls21:80.4878:Configuring libmbedtls21 (amd64)
+pmstatus:libmbedtls21:82.9268:Installed libmbedtls21 (amd64)
+pmstatus:libgit2-1.9:82.9268:Preparing to configure libgit2-1.9 (amd64)
+pmstatus:libgit2-1.9:85.3659:Configuring libgit2-1.9 (amd64)
+pmstatus:libgit2-1.9:87.8049:Installed libgit2-1.9 (amd64)
+pmstatus:bat:87.8049:Preparing to configure bat (amd64)
+pmstatus:bat:90.2439:Configuring bat (amd64)
+pmstatus:bat:92.6829:Installed bat (amd64)
+pmstatus:dovy-cli-tools:92.6829:Preparing to configure dovy-cli-tools (amd64)
+pmstatus:dovy-cli-tools:95.1219:Configuring dovy-cli-tools (amd64)
+pmstatus:dovy-cli-tools:97.5610:Installed dovy-cli-tools (amd64)

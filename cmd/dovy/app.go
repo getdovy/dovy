@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/getdovy/dovy/internal/catalog"
+	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
@@ -22,6 +23,8 @@ type app struct {
 	url       string                            // where updates come from
 	signers   []byte                            // trusted keys
 	installed func() (map[string]string, error) // recipe → installed version
+	in        io.Reader                         // answers to Continue?
+	root      repo.Root                         // runs a command as root
 }
 
 func newApp(out, errs *ui.UI) (*app, error) {
@@ -30,7 +33,8 @@ func newApp(out, errs *ui.UI) (*app, error) {
 		return nil, err
 	}
 	signers := catalog.Signers(catalog.KeysDir, func(s string) { errs.Say(ui.Yellow, "Warning:", s) })
-	return &app{out, errs, dir, catalog.URL, signers, installed}, nil
+	return &app{out: out, errs: errs, dir: dir, url: catalog.URL, signers: signers,
+		installed: installed, in: os.Stdin, root: repo.Sudo}, nil
 }
 
 // installed asks dpkg which dovy packages are installed.

@@ -106,5 +106,65 @@ bundle v1 $T1
 bundle v2 $T1 $T2
 bundle mixed $T1 $T2 $T3 $T4
 bundle bad $T3 $T4
+
+# install: real recipes for the integration tests, plus "surprise", whose
+# postfix makes apt remove an installed exim4.
+g checkout -q --orphan install
+g rm -q -r -f .
+recipe pfetch <<'EOF'
+name = "pfetch"
+description = "Pretty system information tool, Rust rewrite of pfetch"
+kind = "upstream-binary"
+version = "3.1.1"
+maintainer = "test"
+debian = [13]
+
+[[source]]
+url = "https://github.com/Gobidev/pfetch-rs/releases/download/v3.1.1/pfetch-linux-musl-x86_64.tar.gz"
+sha256 = "1816aa30f763856403b1a4d91f73ffd79e96d3a0a5cef6f305f025253f6a3a6c"
+
+[install]
+"/usr/bin/pfetch" = "pfetch"
+EOF
+recipe zram <<'EOF'
+name = "zram"
+description = "Compressed swap in RAM"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["systemd-zram-generator"]
+
+[[file]]
+path = "/etc/systemd/zram-generator.conf.d/00-dovy.conf"
+content = """
+[zram0]
+zram-size = min(ram / 2, 8192)
+compression-algorithm = zstd
+"""
+EOF
+recipe cli-tools <<'EOF'
+name = "cli-tools"
+description = "Command-line search and viewing tools from Debian"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["ripgrep", "fd-find", "bat"]
+EOF
+recipe surprise <<'EOF'
+name = "surprise"
+description = "Pulls postfix, which conflicts with exim4"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["postfix"]
+EOF
+commit "install recipes"
+T5=catalog-2026.04.10.1
+tag trusted $T5
+bundle install $T5
+
 rm -f "$out/catalog.bundle"
-echo "wrote $out/catalog-{v1,v2,mixed,bad}.bundle and $out/allowed_signers"
+echo "wrote $out/catalog-{v1,v2,mixed,bad,install}.bundle and $out/allowed_signers"

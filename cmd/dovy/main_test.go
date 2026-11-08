@@ -46,7 +46,8 @@ func TestRun(t *testing.T) {
 		{"show steam --recipe --diff", 1000, exitUsage, "one option at most"},
 		{"install steam", 0, exitRefused, "dovy runs as root"},
 		{"list", 0, exitRefused, "dovy runs as root"},
-		{"install steam", 1000, exitFailed, "install is not built yet"},
+		{"install steam", 1000, exitFailed, "no catalog yet"},
+		{"remove steam", 1000, exitFailed, "no catalog yet"},
 		{"check", 1000, exitFailed, "milestone 9"},
 		{"list", 1000, exitFailed, "no catalog yet"},
 	}

@@ -22,10 +22,15 @@ func CacheDir() (string, error) {
 	return filepath.Join(base, "dovy"), nil
 }
 
+// Buildable reports whether this dovy builds r's kind.
+func Buildable(r *catalog.Recipe) bool {
+	return r.Kind == catalog.UpstreamBinary || r.Kind == catalog.Setup
+}
+
 // Recipe downloads, unpacks and packs r for a Debian release; it returns
 // the .deb's path under cache/debs.
 func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
-	if r.Kind != catalog.UpstreamBinary {
+	if !Buildable(r) {
 		return "", fmt.Errorf("%s: kind %s is not built yet", r.Name, r.Kind)
 	}
 	work := filepath.Join(cache, "build", r.Name)
@@ -34,6 +39,9 @@ func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
 	}
 	defer os.RemoveAll(work)
 	src, stage := filepath.Join(work, "src"), filepath.Join(work, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", err
+	}
 	for _, s := range r.Sources {
 		if !strings.HasSuffix(s.URL, ".tar.gz") {
 			return "", fmt.Errorf("%s: only .tar.gz sources for now", s.URL)
