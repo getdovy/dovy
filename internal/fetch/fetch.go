@@ -82,3 +82,24 @@ func Size(url string) int64 {
 	}
 	return resp.ContentLength
 }
+
+// Bytes downloads a small file over HTTPS, at most limit bytes; for keys,
+// checked by fingerprint rather than sha256 (2.4).
+func Bytes(url string, limit int64) ([]byte, error) {
+	if !strings.HasPrefix(url, "https://") {
+		return nil, fmt.Errorf("%s: https only", url)
+	}
+	resp, err := Client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", url, resp.Status)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err == nil && int64(len(b)) > limit {
+		err = fmt.Errorf("%s: larger than %d bytes", url, limit)
+	}
+	return b, err
+}

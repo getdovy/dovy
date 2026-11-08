@@ -143,3 +143,28 @@ func TestPinI386(t *testing.T) {
 		t.Errorf("depends %v", x.Packages)
 	}
 }
+
+func TestRepo(t *testing.T) {
+	r := &catalog.Recipe{Name: "google-chrome", Kind: catalog.VendorRepository,
+		Repository: &catalog.Repository{URI: "https://dl.google.com/linux/chrome/deb/", Suite: "stable", Components: []string{"main"}, Packages: []string{"google-chrome-stable"}},
+		Files:      []catalog.File{{Path: "/etc/default/google-chrome", Content: "repo_add_once=\"false\"\n"}}}
+	x := RepoRecipe(r, []byte{0x99, 1, 2})
+	if x.Package() != "dovy-repo-google-chrome" || len(x.Files) != 4 || x.Files[0].Path != "/usr/share/keyrings/dovy-google-chrome.pgp" || x.Files[3].Path != "/etc/default/google-chrome" {
+		t.Fatalf("%+v", x)
+	}
+	if !strings.Contains(x.Files[1].Content, "Signed-By: /usr/share/keyrings/dovy-google-chrome.pgp\n") {
+		t.Errorf("source:\n%s", x.Files[1].Content)
+	}
+	want := "Package: *\nPin: origin dl.google.com\nPin-Priority: 1\n\nPackage: google-chrome-stable\nPin: origin dl.google.com\nPin-Priority: 100\n"
+	if x.Files[2].Content != want {
+		t.Errorf("pin:\n%s", x.Files[2].Content)
+	}
+	e := Expand(r, nil, "trixie")
+	if strings.Join(e.Packages, " ") != "google-chrome-stable dovy-repo-google-chrome" || len(e.Files) != 0 {
+		t.Errorf("recipe package %+v", e)
+	}
+	srcs := ParseList("deb [signed-by=/k] https://dl.google.com/linux/chrome/deb/ stable main\n")
+	if UsedBy(srcs, "dl.google.com") == nil || UsedBy(srcs, "packages.mozilla.org") != nil {
+		t.Error("host use")
+	}
+}
