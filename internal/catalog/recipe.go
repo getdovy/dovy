@@ -70,6 +70,7 @@ type Recipe struct {
 
 	Sources       []Source          `toml:"source"`
 	Install       map[string]string `toml:"install"`
+	Scripts       map[string]string `toml:"scripts"`
 	Repository    *Repository       `toml:"repository"`
 	SourcePackage string            `toml:"source-package"`
 	Packages      []string          `toml:"packages"`
@@ -93,7 +94,28 @@ func (r *Recipe) Package() string {
 // Rev is the package revision (ADR 0010).
 func (r *Recipe) Rev() int { return max(r.Revision, 1) }
 
+// Needs is the capabilities r requires, stated or implied: backports by
+// `backports = true`, i386 by any :i386 package.
+func (r *Recipe) Needs() []string {
+	need := map[string]bool{}
+	for _, c := range r.Requires {
+		need[c] = true
+	}
+	if r.Backports {
+		need["backports"] = true
+	}
+	for _, p := range r.Packages {
+		if strings.HasSuffix(p, ":i386") {
+			need["i386"] = true
+		}
+	}
+	return sorted(need)
+}
+
+var scriptNames = map[string]bool{"preinst": true, "postinst": true, "prerm": true, "postrm": true}
+
 var (
+	pkgRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*(:i386)?$`)
 	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.+-]*$`)
 	hexRe  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	fprRe  = regexp.MustCompile(`^[0-9A-F]{40}$`)
@@ -210,6 +232,14 @@ func check(r *Recipe) []string {
 			add("install %s: source %q must be relative, without ..", dst, src)
 		}
 	}
+	for _, k := range sorted(r.Scripts) {
+		if !scriptNames[k] {
+			add("scripts: unknown script %q", k)
+		}
+	}
+	if len(r.Scripts) > 0 && (len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb")) {
+		add("scripts: only for one vendor .deb source")
+	}
 	for _, f := range r.Files {
 		if !dropIn(f.Path) {
 			add("file %s: only drop-ins under /etc/**/*.d/", f.Path)
@@ -220,7 +250,7 @@ func check(r *Recipe) []string {
 		pkgs = append(pkgs, r.Repository.Packages...)
 	}
 	for _, n := range pkgs {
-		if !nameRe.MatchString(n) {
+		if !pkgRe.MatchString(n) {
 			add("package %q: an exact package name", n)
 		}
 	}
@@ -229,6 +259,7 @@ func check(r *Recipe) []string {
 	has := map[string]bool{
 		"source":         len(r.Sources) > 0,
 		"install":        len(r.Install) > 0,
+		"scripts":        len(r.Scripts) > 0,
 		"repository":     r.Repository != nil,
 		"source-package": r.SourcePackage != "",
 		"packages":       len(r.Packages) > 0,
@@ -239,7 +270,7 @@ func check(r *Recipe) []string {
 	}
 	allowed := map[string][]string{
 		UpstreamBuild:    {"source", "build.sh"},
-		UpstreamBinary:   {"source", "install"},
+		UpstreamBinary:   {"source", "install", "scripts"},
 		VendorRepository: {"repository"},
 		TestingRebuild:   {"source-package", "build.sh"},
 		Setup:            {"packages", "backports", "file"},
