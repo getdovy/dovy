@@ -22,7 +22,7 @@ const Arch = "amd64"
 
 // ArchOf is the package architecture: setup packages hold no binaries.
 func ArchOf(r *catalog.Recipe) string {
-	if r.Kind == catalog.Setup || r.Kind == capability.Kind {
+	if r.Kind == catalog.Setup || r.Kind == catalog.VendorRepository || r.Kind == capability.Kind {
 		return "all"
 	}
 	return Arch

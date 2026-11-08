@@ -27,7 +27,11 @@ func CacheDir() (string, error) {
 
 // Buildable reports whether this dovy builds r's kind.
 func Buildable(r *catalog.Recipe) bool {
-	return r.Kind == catalog.UpstreamBinary || r.Kind == catalog.Setup || r.Kind == capability.Kind
+	switch r.Kind {
+	case catalog.UpstreamBinary, catalog.Setup, catalog.VendorRepository, capability.Kind:
+		return true
+	}
+	return false
 }
 
 // Recipe downloads, unpacks and packs r for a Debian release; it returns

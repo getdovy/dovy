@@ -64,7 +64,8 @@ type txn struct {
 func (t *txn) sourceOpts() []string {
 	var o []string
 	for i := 0; i+1 < len(t.opts); i += 2 {
-		if v := t.opts[i+1]; strings.HasPrefix(v, "Dir::Etc::SourceParts=") || strings.HasPrefix(v, "Dir::State::Lists=") || strings.HasPrefix(v, "APT::Architectures") {
+		if v := t.opts[i+1]; strings.HasPrefix(v, "Dir::Etc::SourceParts=") || strings.HasPrefix(v, "Dir::Etc::PreferencesParts=") ||
+			strings.HasPrefix(v, "Dir::State::Lists=") || strings.HasPrefix(v, "APT::Architectures") {
 			o = append(o, t.opts[i], t.opts[i+1])
 		}
 	}
@@ -72,32 +73,42 @@ func (t *txn) sourceOpts() []string {
 }
 
 // withConfig sets up a temporary apt configuration as the user: the
-// system's sources and lists, with files changed ("" removes one) and i386
-// added if asked, so apt can plan before anything changes (8.3.3).
-func (t *txn) withConfig(files map[string]string, i386 bool) error {
+// system's sources, pins and lists, with c's changes, so apt can plan before
+// anything changes (8.3.3).
+func (t *txn) withConfig(c *simConfig) error {
 	dir := filepath.Join(t.tmp, "apt")
-	parts, lists := filepath.Join(dir, "parts"), filepath.Join(dir, "lists")
-	for _, d := range []string{parts, filepath.Join(lists, "partial"), filepath.Join(dir, "cache", "archives", "partial")} {
+	parts, prefs, keys, lists := filepath.Join(dir, "parts"), filepath.Join(dir, "prefs"), filepath.Join(dir, "keys"), filepath.Join(dir, "lists")
+	for _, d := range []string{parts, prefs, keys, filepath.Join(lists, "partial"), filepath.Join(dir, "cache", "archives", "partial")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	if err := exec.Command("sh", "-c", `cp /etc/apt/sources.list.d/* "$1"/ 2>/dev/null; cp /var/lib/apt/lists/*_* "$2"/ 2>/dev/null; true`, "sh", parts, lists).Run(); err != nil {
+	copyAll := `cp /etc/apt/sources.list.d/* "$1"/ 2>/dev/null; cp /etc/apt/preferences.d/* "$2"/ 2>/dev/null; cp /var/lib/apt/lists/*_* "$3"/ 2>/dev/null; true`
+	if err := exec.Command("sh", "-c", copyAll, "sh", parts, prefs, lists).Run(); err != nil {
 		return err
 	}
-	for name, text := range files {
-		p := filepath.Join(parts, name)
-		if text == "" {
-			os.Remove(p)
-		} else if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+	write := func(dir string, files map[string]string) error {
+		for name, text := range files {
+			p := filepath.Join(dir, name)
+			if text == "" {
+				os.Remove(p)
+			} else if err := os.WriteFile(p, []byte(strings.ReplaceAll(text, "@KEYS@", keys)), 0o644); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for d, files := range map[string]map[string]string{parts: c.sources, prefs: c.prefs, keys: c.keys} {
+		if err := write(d, files); err != nil {
 			return err
 		}
 	}
 	t.opts = []string{
-		"-o", "Dir::Etc::SourceParts=" + parts, "-o", "Dir::State::Lists=" + lists,
+		"-o", "Dir::Etc::SourceParts=" + parts, "-o", "Dir::Etc::PreferencesParts=" + prefs,
+		"-o", "Dir::State::Lists=" + lists,
 		"-o", "Dir::Cache=" + filepath.Join(dir, "cache"), "-o", "Debug::NoLocking=1",
 	}
-	if i386 {
+	if c.i386 {
 		t.opts = append(t.opts, "-o", "APT::Architectures::=amd64", "-o", "APT::Architectures::=i386")
 	}
 	out, err := exec.Command("apt-get", append(append([]string{"-q"}, t.opts...), "update")...).CombinedOutput()

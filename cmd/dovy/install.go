@@ -127,11 +127,33 @@ func (a *app) install(names []string) int {
 	defer os.RemoveAll(tmp)
 	t.tmp = tmp
 
-	// Capabilities, built from the system's sources (5.1–5.4).
+	// Capabilities, built from the system's sources (5.1–5.4), and vendor
+	// repositories, keys checked now (2.4, 5.10).
 	t.inst = inst
-	if err := t.capabilities(needs, codename); err != nil {
+	sim := newSimConfig()
+	if err := t.capabilities(needs, codename, sim); err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
 		return exitFailed
+	}
+	for _, r := range order {
+		if r.Repository == nil || !contains(t.names, r.Name) {
+			continue
+		}
+		refusal, err := t.repository(r, sim)
+		if err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
+			return exitFailed
+		}
+		if refusal[0] != "" {
+			a.errs.Refuse(r.Name, refusal[0], refusal[1])
+			return exitRefused
+		}
+	}
+	if !sim.empty() {
+		if err := t.withConfig(sim); err != nil {
+			a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
+			return exitFailed
+		}
 	}
 
 	// Pairs: the other half goes, and its backports packages return to

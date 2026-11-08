@@ -6,6 +6,7 @@ package capability
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +35,7 @@ var nonFree = []string{"contrib", "non-free", "non-free-firmware"}
 type Source struct {
 	URIs, Suites, Components []string
 	SignedBy                 string
+	File                     string // where it was read
 }
 
 // ParseDeb822 reads a .sources file.
@@ -105,7 +107,10 @@ func ParseList(text string) []Source {
 func System(etc string) []Source {
 	var out []Source
 	if b, err := os.ReadFile(filepath.Join(etc, "sources.list")); err == nil {
-		out = append(out, ParseList(string(b))...)
+		for _, s := range ParseList(string(b)) {
+			s.File = filepath.Join(etc, "sources.list")
+			out = append(out, s)
+		}
 	}
 	files, _ := filepath.Glob(filepath.Join(etc, "sources.list.d", "*"))
 	sort.Strings(files)
@@ -117,12 +122,17 @@ func System(etc string) []Source {
 		if err != nil {
 			continue
 		}
+		var got []Source
 		switch {
 		case strings.HasSuffix(f, ".sources"):
-			out = append(out, ParseDeb822(string(b))...)
+			got = ParseDeb822(string(b))
 		case strings.HasSuffix(f, ".list"):
-			out = append(out, ParseList(string(b))...)
+			got = ParseList(string(b))
 		}
+		for i := range got {
+			got[i].File = f
+		}
+		out = append(out, got...)
 	}
 	return out
 }
@@ -190,6 +200,10 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	}
 	for _, c := range r.Needs() {
 		x.Packages = append(x.Packages, Package(c))
+	}
+	if q := r.Repository; q != nil { // its files are the repository package's
+		x.Packages = append(append(x.Packages, q.Packages...), Package("repo-"+r.Name))
+		x.Files = nil
 	}
 	x.Conflicts = nil
 	for _, c := range r.Conflicts {
@@ -333,4 +347,58 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// Host is a repository's host name, the unit of 5.10.
+func Host(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// UsedBy returns a source on host that the user configured, if any.
+func UsedBy(srcs []Source, host string) *Source {
+	for i, s := range srcs {
+		for _, u := range s.URIs {
+			if Host(u) == host {
+				return &srcs[i]
+			}
+		}
+	}
+	return nil
+}
+
+// RepoSource is the apt source of a vendor repository, with its keyring.
+func RepoSource(q *catalog.Repository, keyring string) string {
+	return fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\nArchitectures: amd64\nSigned-By: %s\n",
+		q.URI, q.Suite, strings.Join(q.Components, " "), keyring)
+}
+
+// RepoPin lets the vendor supply only the recipe's packages (5.10): the host
+// at 1, the packages at 100.
+func RepoPin(q *catalog.Repository) string {
+	h := Host(q.URI)
+	return fmt.Sprintf("Package: *\nPin: origin %s\nPin-Priority: 1\n\nPackage: %s\nPin: origin %s\nPin-Priority: 100\n",
+		h, strings.Join(q.Packages, " "), h)
+}
+
+// Keyring is where a repository package installs its vendor's key.
+func Keyring(recipe string) string { return "/usr/share/keyrings/dovy-" + recipe + ".pgp" }
+
+// RepoRecipe is dovy-repo-<recipe>: the vendor's key (binary, checked by
+// fingerprint), source, pin, and the recipe's files for the vendor's
+// scripts (2.4, 2.6, 5.10).
+func RepoRecipe(r *catalog.Recipe, key []byte) *catalog.Recipe {
+	q := r.Repository
+	return &catalog.Recipe{
+		Name: "repo-" + r.Name, Kind: Kind, Version: "1", Maintainer: "dovy",
+		Description: Host(q.URI) + " repository, for " + r.Name,
+		Files: append([]catalog.File{
+			{Path: Keyring(r.Name), Content: string(key)},
+			{Path: "/etc/apt/sources.list.d/dovy-" + r.Name + ".sources", Content: RepoSource(q, Keyring(r.Name))},
+			{Path: "/etc/apt/preferences.d/dovy-" + r.Name + ".pref", Content: RepoPin(q)},
+		}, r.Files...),
+	}
 }

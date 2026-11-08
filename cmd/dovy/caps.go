@@ -10,6 +10,8 @@ import (
 	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
+	"github.com/getdovy/dovy/internal/fetch"
+	"github.com/getdovy/dovy/internal/pgp"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
@@ -19,10 +21,44 @@ func foreign() bool {
 	return strings.Contains(" "+strings.Join(strings.Fields(string(out)), " ")+" ", " i386 ")
 }
 
+// simConfig is what the simulation's temporary apt configuration adds:
+// sources and pins ("" removes one), keyrings, and i386.
+type simConfig struct {
+	sources, prefs, keys map[string]string
+	i386                 bool
+}
+
+func newSimConfig() *simConfig {
+	return &simConfig{sources: map[string]string{}, prefs: map[string]string{}, keys: map[string]string{}}
+}
+
+func (c *simConfig) empty() bool {
+	return len(c.sources) == 0 && len(c.prefs) == 0 && !c.i386
+}
+
+// planCap adds a capability or repository package to build and install
+// first, unless the installed one ships the same (5.1). It reports whether
+// it was added.
+func (t *txn) planCap(r *catalog.Recipe) (added, updated bool) {
+	pkg := r.Package()
+	i, installed := t.inst[pkg]
+	if installed && i.Content == deb.ContentHash(r) {
+		return false, false
+	}
+	if installed { // a new version, never reused (ADR 0010)
+		n, _ := strconv.Atoi(strings.SplitN(i.Version, "-", 2)[0])
+		r.Version = strconv.Itoa(n + 1)
+	}
+	t.build = append([]*catalog.Recipe{r}, t.build...)
+	t.versions[pkg] = deb.Version(r, t.release)
+	t.caps[pkg] = true
+	return true, installed
+}
+
 // capabilities plans what t's recipes need (5.1–5.4): new capabilities, and
 // installed ones whose content changed, built and installed first.
 // needs maps a capability to the recipes asking for it.
-func (t *txn) capabilities(needs map[string][]string, codename string) error {
+func (t *txn) capabilities(needs map[string][]string, codename string, sim *simConfig) error {
 	srcs := capability.System("/etc/apt")
 	compText, added := capability.ComponentsSource(srcs, codename)
 	_, compInstalled := t.inst[capability.Components]
@@ -30,12 +66,8 @@ func (t *txn) capabilities(needs map[string][]string, codename string) error {
 	if needs["components"] != nil || compInstalled {
 		extra = added
 	}
-	files := map[string]string{} // new sources for the simulation; "" removes
-	arch := false
 	for _, name := range []string{"components", "backports", "i386"} {
-		pkg := capability.Package(name)
-		i, installed := t.inst[pkg]
-		if needs[name] == nil && !installed {
+		if _, installed := t.inst[capability.Package(name)]; needs[name] == nil && !installed {
 			continue
 		}
 		var r *catalog.Recipe
@@ -53,27 +85,22 @@ func (t *txn) capabilities(needs map[string][]string, codename string) error {
 			r = capability.BackportsRecipe(text)
 		case "i386":
 			r = capability.I386Recipe()
-			arch = !foreign()
 		}
-		if installed && i.Content == deb.ContentHash(r) {
+		ok, updated := t.planCap(r)
+		if !ok {
 			continue
 		}
-		if installed { // a new version, never reused (ADR 0010)
-			n, _ := strconv.Atoi(strings.SplitN(i.Version, "-", 2)[0])
-			r.Version = strconv.Itoa(n + 1)
-		}
-		t.build = append([]*catalog.Recipe{r}, t.build...)
-		t.versions[pkg] = deb.Version(r, t.release)
-		t.caps[pkg] = true
-		file := "dovy-" + name + ".sources"
-		if name != "i386" {
-			files[file] = ""
+		if name == "i386" {
+			sim.i386 = !foreign()
+		} else {
+			file := "dovy-" + name + ".sources"
+			sim.sources[file] = ""
 			for _, f := range r.Files {
-				files[file] = f.Content
+				sim.sources[file] = f.Content
 			}
 		}
 		reason := strings.Join(needs[name], ", ")
-		if installed {
+		if updated {
 			reason = "updated"
 		}
 		switch {
@@ -85,10 +112,45 @@ func (t *txn) capabilities(needs map[string][]string, codename string) error {
 			t.system = append(t.system, ui.Pair{Item: "Debian backports", Reason: reason})
 		}
 	}
-	if len(files) == 0 && !arch {
-		return nil
+	return nil
+}
+
+// repository plans a vendor-repository recipe's package dovy-repo-<name>
+// (2.4, 5.10): the key fetched now and checked by fingerprint, no other
+// source for the host, then source, key and pin for the simulation.
+// refusal is set when the recipe cannot go ahead.
+func (t *txn) repository(r *catalog.Recipe, sim *simConfig) (refusal [2]string, err error) {
+	q := r.Repository
+	host := capability.Host(q.URI)
+	if s := capability.UsedBy(capability.System("/etc/apt"), host); s != nil {
+		return [2]string{host + " is already configured outside dovy", s.File + "; remove it, then: dovy install " + r.Name}, nil
 	}
-	return t.withConfig(files, arch)
+	b, err := fetch.Bytes(q.KeyURL, 1<<20)
+	if err != nil {
+		return refusal, err
+	}
+	key, err := pgp.Read(b)
+	if err != nil {
+		return [2]string{"vendor key unreadable", err.Error()}, nil
+	}
+	if want := strings.ToUpper(strings.ReplaceAll(q.Fingerprint, " ", "")); key.Fingerprint != want {
+		return [2]string{"vendor key fingerprint differs from the recipe", key.Fingerprint}, nil
+	}
+	rr := capability.RepoRecipe(r, key.Binary)
+	ok, updated := t.planCap(rr)
+	if !ok {
+		return refusal, nil
+	}
+	name := "dovy-" + r.Name
+	sim.keys[name+".pgp"] = string(key.Binary)
+	sim.sources[name+".sources"] = capability.RepoSource(q, "@KEYS@/"+name+".pgp")
+	sim.prefs[name+".pref"] = capability.RepoPin(q)
+	reason := r.Name
+	if updated {
+		reason = "updated"
+	}
+	t.system = append(t.system, ui.Pair{Item: host + " repository", Reason: reason})
+	return refusal, nil
 }
 
 // leaveI386 plans i386's removal when dovy-i386 goes (4.8): dovy added i386
