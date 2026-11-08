@@ -145,26 +145,32 @@ func TestPinI386(t *testing.T) {
 }
 
 func TestRepo(t *testing.T) {
-	r := &catalog.Recipe{Name: "google-chrome", Kind: catalog.VendorRepository,
-		Repository: &catalog.Repository{URI: "https://dl.google.com/linux/chrome/deb/", Suite: "stable", Components: []string{"main"}, Packages: []string{"google-chrome-stable"}},
-		Files:      []catalog.File{{Path: "/etc/default/google-chrome", Content: "repo_add_once=\"false\"\n"}}}
-	x := RepoRecipe(r, []byte{0x99, 1, 2})
-	if x.Package() != "dovy-repo-google-chrome" || len(x.Files) != 4 || x.Files[0].Path != "/usr/share/keyrings/dovy-google-chrome.pgp" || x.Files[3].Path != "/etc/default/google-chrome" {
+	q := &catalog.Repository{Name: "brave", URI: "https://brave-browser-apt-release.s3.brave.com/", Suite: "stable", Components: []string{"main"},
+		Files: []catalog.File{{Path: "/etc/default/brave-browser", Content: "x"}}}
+	x := RepoRecipe(q, []byte{0x99, 1, 2}, []string{"brave-browser", "brave-origin"})
+	if x.Package() != "dovy-repo-brave" || len(x.Files) != 4 || x.Files[0].Path != "/usr/share/keyrings/dovy-brave.pgp" || x.Files[3].Path != "/etc/default/brave-browser" {
 		t.Fatalf("%+v", x)
 	}
-	if !strings.Contains(x.Files[1].Content, "Signed-By: /usr/share/keyrings/dovy-google-chrome.pgp\n") {
+	if !strings.Contains(x.Files[1].Content, "Signed-By: /usr/share/keyrings/dovy-brave.pgp\n") {
 		t.Errorf("source:\n%s", x.Files[1].Content)
 	}
-	want := "Package: *\nPin: origin dl.google.com\nPin-Priority: 1\n\nPackage: google-chrome-stable\nPin: origin dl.google.com\nPin-Priority: 100\n"
+	want := "Package: *\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 1\n\nPackage: brave-browser brave-origin\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 100\n"
 	if x.Files[2].Content != want {
 		t.Errorf("pin:\n%s", x.Files[2].Content)
 	}
-	e := Expand(r, nil, "trixie")
-	if strings.Join(e.Packages, " ") != "google-chrome-stable dovy-repo-google-chrome" || len(e.Files) != 0 {
-		t.Errorf("recipe package %+v", e)
+	r := &catalog.Recipe{Name: "brave-origin", Kind: catalog.VendorRepository, Repository: "brave", Repo: q, Packages: []string{"brave-origin"}}
+	if e := Expand(r, nil, "trixie"); strings.Join(e.Packages, " ") != "brave-origin dovy-repo-brave" {
+		t.Errorf("recipe package %+v", e.Packages)
 	}
 	srcs := ParseList("deb [signed-by=/k] https://dl.google.com/linux/chrome/deb/ stable main\n")
 	if UsedBy(srcs, "dl.google.com") == nil || UsedBy(srcs, "packages.mozilla.org") != nil {
 		t.Error("host use")
+	}
+}
+
+func TestFlatSource(t *testing.T) {
+	q := &catalog.Repository{URI: "https://ppa.floorp.app/amd64", Suite: "./"}
+	if got := RepoSource(q, "/k"); got != "Types: deb\nURIs: https://ppa.floorp.app/amd64\nSuites: ./\nArchitectures: amd64\nSigned-By: /k\n" {
+		t.Errorf("got %q", got)
 	}
 }

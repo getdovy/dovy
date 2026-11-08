@@ -19,13 +19,32 @@ const (
 	tagPublicKey = 6
 )
 
-// Key is a checked key: its primary fingerprint and the binary keyring.
+// Key is a key file read: its primary keys' fingerprints and the binary
+// keyring.
 type Key struct {
-	Fingerprint string // uppercase hex
-	Binary      []byte
+	Fingerprints []string // uppercase hex, in file order
+	Binary       []byte
 }
 
-// Read parses an armored or binary key file holding exactly one primary key.
+// Matches reports whether the file's primary keys are exactly want: none
+// missing, none extra (2.4).
+func (k *Key) Matches(want []string) bool {
+	if len(k.Fingerprints) != len(want) {
+		return false
+	}
+	got := map[string]bool{}
+	for _, f := range k.Fingerprints {
+		got[f] = true
+	}
+	for _, f := range want {
+		if !got[strings.ToUpper(strings.ReplaceAll(f, " ", ""))] {
+			return false
+		}
+	}
+	return len(got) == len(want)
+}
+
+// Read parses an armored or binary key file.
 func Read(data []byte) (*Key, error) {
 	bin := data
 	if bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
@@ -34,26 +53,25 @@ func Read(data []byte) (*Key, error) {
 			return nil, err
 		}
 	}
-	var fpr string
+	var fprs []string
 	for rest := bin; len(rest) > 0; {
 		tag, body, next, err := packet(rest)
 		if err != nil {
 			return nil, err
 		}
 		if tag == tagPublicKey {
-			if fpr != "" {
-				return nil, errors.New("key file holds more than one key")
-			}
-			if fpr, err = fingerprint(body); err != nil {
+			fpr, err := fingerprint(body)
+			if err != nil {
 				return nil, err
 			}
+			fprs = append(fprs, fpr)
 		}
 		rest = next
 	}
-	if fpr == "" {
+	if len(fprs) == 0 {
 		return nil, errors.New("no public key in the file")
 	}
-	return &Key{Fingerprint: fpr, Binary: bin}, nil
+	return &Key{Fingerprints: fprs, Binary: bin}, nil
 }
 
 // fingerprint of a public key packet body: v4 SHA-1, v6 SHA-256.

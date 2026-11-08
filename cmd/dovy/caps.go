@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/getdovy/dovy/internal/apt"
+	"github.com/getdovy/dovy/internal/build"
 	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
@@ -115,41 +119,61 @@ func (t *txn) capabilities(needs map[string][]string, codename string, sim *simC
 	return nil
 }
 
-// repository plans a vendor-repository recipe's package dovy-repo-<name>
-// (2.4, 5.10): the key fetched now and checked by fingerprint, no other
-// source for the host, then source, key and pin for the simulation.
-// refusal is set when the recipe cannot go ahead.
-func (t *txn) repository(r *catalog.Recipe, sim *simConfig) (refusal [2]string, err error) {
-	q := r.Repository
+// repoPackages is the pin's package list for q: the packages of every
+// recipe using it that stays or comes installed (ADR 0013).
+func repoPackages(q *catalog.Repository, rs map[string]*catalog.Recipe, using map[string]bool) []string {
+	set := map[string]bool{}
+	for name := range using {
+		if r := rs[name]; r != nil && r.Repo == q {
+			for _, p := range r.Packages {
+				set[p] = true
+			}
+		}
+	}
+	pkgs := make([]string, 0, len(set))
+	for p := range set {
+		pkgs = append(pkgs, p)
+	}
+	sort.Strings(pkgs)
+	return pkgs
+}
+
+// repository plans dovy-repo-<name> for pkgs (2.4, 5.10, ADR 0013): no
+// other source for the host, the key fetched live (or key, when given,
+// read from the installed keyring) and checked by fingerprint. sim, when
+// set, gets the source, key and pin for the simulation. refusal is set
+// when it cannot go ahead.
+func (t *txn) repository(q *catalog.Repository, pkgs []string, key []byte, users string, sim *simConfig) (refusal [2]string, err error) {
 	host := capability.Host(q.URI)
 	if s := capability.UsedBy(capability.System("/etc/apt"), host); s != nil {
-		return [2]string{host + " is already configured outside dovy", s.File + "; remove it, then: dovy install " + r.Name}, nil
+		return [2]string{host + " is already configured outside dovy", s.File + "; remove it, then try again"}, nil
 	}
-	b, err := fetch.Bytes(q.KeyURL, 1<<20)
-	if err != nil {
-		return refusal, err
+	if key == nil {
+		if key, err = fetch.Bytes(q.KeyURL, 1<<20); err != nil {
+			return refusal, err
+		}
 	}
-	key, err := pgp.Read(b)
+	k, err := pgp.Read(key)
 	if err != nil {
 		return [2]string{"vendor key unreadable", err.Error()}, nil
 	}
-	if want := strings.ToUpper(strings.ReplaceAll(q.Fingerprint, " ", "")); key.Fingerprint != want {
-		return [2]string{"vendor key fingerprint differs from the recipe", key.Fingerprint}, nil
+	if !k.Matches(q.Fingerprints) {
+		return [2]string{q.Name + " key fingerprints differ from the catalog", strings.Join(k.Fingerprints, ", ")}, nil
 	}
-	rr := capability.RepoRecipe(r, key.Binary)
-	ok, updated := t.planCap(rr)
+	ok, updated := t.planCap(capability.RepoRecipe(q, k.Binary, pkgs))
 	if !ok {
 		return refusal, nil
 	}
-	name := "dovy-" + r.Name
-	sim.keys[name+".pgp"] = string(key.Binary)
-	sim.sources[name+".sources"] = capability.RepoSource(q, "@KEYS@/"+name+".pgp")
-	sim.prefs[name+".pref"] = capability.RepoPin(q)
-	reason := r.Name
-	if updated {
-		reason = "updated"
+	if sim != nil {
+		name := "dovy-" + q.Name
+		sim.keys[name+".pgp"] = string(k.Binary)
+		sim.sources[name+".sources"] = capability.RepoSource(q, "@KEYS@/"+name+".pgp")
+		sim.prefs[name+".pref"] = capability.RepoPin(q, pkgs)
 	}
-	t.system = append(t.system, ui.Pair{Item: host + " repository", Reason: reason})
+	if updated {
+		users = "updated: " + strings.Join(pkgs, ", ")
+	}
+	t.system = append(t.system, ui.Pair{Item: host + " repository", Reason: users})
 	return refusal, nil
 }
 
@@ -232,4 +256,68 @@ func suffix(names []string, s string) []string {
 func pkgName(arg string) string {
 	n := strings.FieldsFunc(arg, func(c rune) bool { return c == '/' || c == '=' })[0]
 	return strings.TrimSuffix(n, "-")
+}
+
+// repacked downloads r's package from its repacked repository and repacks
+// it (ADR 0014): key checked by fingerprint, the repository read with a
+// temporary apt configuration as the user (apt checks the signed index),
+// never given to the system's apt. It returns the repack and its version.
+func (t *txn) repacked(r *catalog.Recipe, cache string) (path, version string, refusal [2]string, err error) {
+	q := r.Repo
+	host := capability.Host(q.URI)
+	if s := capability.UsedBy(capability.System("/etc/apt"), host); s != nil {
+		return "", "", [2]string{host + " is already configured outside dovy", s.File + "; remove it, then try again"}, nil
+	}
+	b, err := fetch.Bytes(q.KeyURL, 1<<20)
+	if err != nil {
+		return "", "", refusal, err
+	}
+	k, err := pgp.Read(b)
+	if err != nil {
+		return "", "", [2]string{"vendor key unreadable", err.Error()}, nil
+	}
+	if !k.Matches(q.Fingerprints) {
+		return "", "", [2]string{q.Name + " key fingerprints differ from the catalog", strings.Join(k.Fingerprints, ", ")}, nil
+	}
+	dir := filepath.Join(t.tmp, "repack", q.Name)
+	parts, lists, dl := filepath.Join(dir, "parts"), filepath.Join(dir, "lists"), filepath.Join(cache, "vendor", q.Name)
+	for _, d := range []string{parts, filepath.Join(lists, "partial"), filepath.Join(dir, "cache", "archives", "partial"), dl} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return "", "", refusal, err
+		}
+	}
+	keyring := filepath.Join(dir, "key.pgp")
+	if err := os.WriteFile(keyring, k.Binary, 0o644); err != nil {
+		return "", "", refusal, err
+	}
+	if err := os.WriteFile(filepath.Join(parts, q.Name+".sources"), []byte(capability.RepoSource(q, keyring)), 0o644); err != nil {
+		return "", "", refusal, err
+	}
+	opts := []string{"-q", "-o", "Dir::Etc::SourceList=/dev/null", "-o", "Dir::Etc::SourceParts=" + parts,
+		"-o", "Dir::Etc::PreferencesParts=" + parts, "-o", "Dir::State::Lists=" + lists,
+		"-o", "Dir::Cache=" + filepath.Join(dir, "cache"), "-o", "Debug::NoLocking=1"}
+	for _, args := range [][]string{{"update"}, {"download", r.Name}} {
+		cmd := exec.Command("apt-get", append(append([]string{}, opts...), args...)...)
+		cmd.Dir = dl
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", "", refusal, fmt.Errorf("%s repository: apt-get %s: %s", q.Name, args[0], strings.TrimSpace(string(out)))
+		}
+	}
+	got, _ := filepath.Glob(filepath.Join(dl, r.Name+"_*.deb"))
+	newest := ""
+	for _, g := range got {
+		v, _ := exec.Command("dpkg-deb", "-f", g, "Version").Output()
+		if ver := strings.TrimSpace(string(v)); newest == "" || apt.Compare(ver, version) > 0 {
+			newest, version = g, ver
+		}
+	}
+	if newest == "" {
+		return "", "", refusal, fmt.Errorf("%s repository: no %s downloaded", q.Name, r.Name)
+	}
+	if apt.Compare(version, r.Version) < 0 {
+		return "", "", [2]string{"the repository offers " + version + ", older than the reviewed " + r.Version, host}, nil
+	}
+	version = fmt.Sprintf("%s-%d~dovy%d", version, r.Rev(), t.release) // ADR 0010
+	path, err = build.Repack(r, newest, version, cache)
+	return path, version, refusal, err
 }

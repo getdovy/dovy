@@ -84,6 +84,21 @@ func vendor(r *catalog.Recipe, release int, cache, work string) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	return repack(r, p, deb.Version(r, release), cache, work)
+}
+
+// Repack repacks a vendor .deb downloaded from a repacked repository
+// (ADR 0014) as version, into cache/debs.
+func Repack(r *catalog.Recipe, path, version, cache string) (string, error) {
+	work := filepath.Join(cache, "build", r.Name)
+	if err := os.RemoveAll(work); err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(work)
+	return repack(r, path, version, cache, work)
+}
+
+func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
 	raw := filepath.Join(work, "raw")
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return "", err
@@ -96,7 +111,6 @@ func vendor(r *catalog.Recipe, release int, cache, work string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	version := deb.Version(r, release)
 	fields, err := Restamp(string(b), r.Package(), version, r.Name)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", r.Name, err)

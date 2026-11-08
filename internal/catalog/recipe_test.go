@@ -77,7 +77,7 @@ func TestLoadRefuses(t *testing.T) {
 		"install outside":  {map[string]string{"steam": steam + "\n[install]\n\"/etc/x\" = \"x\"\n"}, "under /usr/"},
 		"install dotdot":   {map[string]string{"steam": steam + "\n[install]\n\"/usr/bin/x\" = \"../x\"\n"}, "without .."},
 		"arch suffix":      {map[string]string{"x": setup(`packages = ["libgl1:arm64"]`)}, "exact package name"},
-		"script name":      {map[string]string{"steam": steam + "\n[scripts]\nconfig = \"\"\n"}, `unknown script "config"`},
+		"script name":      {map[string]string{"steam": steam + "\n[scripts]\nfoo = \"\"\n"}, `unknown script "foo"`},
 		"script tarball":   {map[string]string{"steam": steam + "\n[scripts]\npostinst = \"\"\n"}, "only for one vendor .deb"},
 		"wrong kind field": {map[string]string{"steam": top("members = [\"steam\"]\n")}, "members: not used by kind"},
 		"empty setup":      {map[string]string{"x": setup("")}, "setup needs packages"},
@@ -134,23 +134,53 @@ func TestNeeds(t *testing.T) {
 }
 
 func TestVendorRepository(t *testing.T) {
+	recipe := func(name, repo string) string {
+		return "name = \"" + name + "\"\ndescription = \"d\"\nkind = \"vendor-repository\"\nversion = \"1\"\nmaintainer = \"m\"\ndebian = [13]\nrepository = \"" + repo + "\"\npackages = [\"" + name + "\"]\n"
+	}
 	repo := func(name, uri, extra string) string {
-		return "name = \"" + name + "\"\ndescription = \"d\"\nkind = \"vendor-repository\"\nversion = \"1\"\nmaintainer = \"m\"\ndebian = [13]\n" + extra +
-			"\n[repository]\nuri = \"" + uri + "\"\nsuite = \"stable\"\ncomponents = [\"main\"]\nkey-url = \"https://x/k\"\nfingerprint = \"EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796\"\npackages = [\"p\"]\n"
+		return "name = \"" + name + "\"\nuri = \"" + uri + "\"\nsuite = \"stable\"\ncomponents = [\"main\"]\nkey-url = \"https://x/k\"\nmaintainer = \"m\"\n" +
+			"fingerprints = [\"DBF1A116C220B8C7164F98230686B78420038257\", \"47D32A74E9A9E013A4B4926C68D513D36A73CD96\"]\n" + extra
 	}
-	file := func(path string) string { return "[[file]]\npath = \"" + path + "\"\ncontent = \"x\"\n" }
-	ok := map[string]string{"google-chrome": repo("google-chrome", "https://dl.google.com/linux/chrome/deb/", file("/etc/default/google-chrome"))}
-	if _, err := Load(catalogDir(t, ok), noDebian); err != nil {
-		t.Errorf("valid: %v", err)
+	load := func(recipes, repos map[string]string) (map[string]*Recipe, error) {
+		dir := catalogDir(t, recipes)
+		os.MkdirAll(filepath.Join(dir, "repositories"), 0o755)
+		for n, body := range repos {
+			os.WriteFile(filepath.Join(dir, "repositories", n+".toml"), []byte(body), 0o644)
+		}
+		return Load(dir, noDebian)
 	}
-	bad := map[string]map[string]string{
-		"/etc/default/google-chrome": {"x": repo("x", "https://a.example/", file("/etc/apt/sources.list.d/x.list"))},
-		"already has a repository":   {"a": repo("a", "https://dl.google.com/a", ""), "b": repo("b", "https://dl.google.com/b", "")},
+	brave := repo("brave", "https://brave-browser-apt-release.s3.brave.com/", "[[file]]\npath = \"/etc/default/brave-browser\"\ncontent = \"x\"\n")
+	rs, err := load(map[string]string{"brave-browser": recipe("brave-browser", "brave"), "brave-origin": recipe("brave-origin", "brave")}, map[string]string{"brave": brave})
+	if err != nil || rs["brave-browser"].Repo != rs["brave-origin"].Repo || rs["brave-origin"].Repo.Name != "brave" {
+		t.Fatalf("shared repository: %v", err)
 	}
-	want := map[string]string{"/etc/default/google-chrome": "writes only /etc/default/<name>", "already has a repository": "dl.google.com already has a repository recipe"}
-	for k, rs := range bad {
-		if _, err := Load(catalogDir(t, rs), noDebian); err == nil || !strings.Contains(err.Error(), want[k]) {
-			t.Errorf("%s: %v", k, err)
+	op, err := load(map[string]string{"opera-stable": recipe("opera-stable", "opera") + "[scripts]\npostinst = \"x\"\nconfig = \"\"\n"},
+		map[string]string{"opera": repo("opera", "https://deb.opera.com/opera-stable/", "repack = true\n")})
+	if err != nil || op["opera-stable"].Package() != "opera-stable" {
+		t.Errorf("repacked: %v", err)
+	}
+	flat := strings.Replace(strings.Replace(repo("floorp", "https://ppa.floorp.app/amd64", ""), `suite = "stable"`, `suite = "./"`, 1), `components = ["main"]`+"\n", "", 1)
+	if fl, err := load(nil, map[string]string{"floorp": flat}); err != nil {
+		t.Errorf("flat: %v %v", fl, err)
+	}
+	cases := map[string]struct {
+		recipes, repos map[string]string
+		want           string
+	}{
+		"missing":   {map[string]string{"a": recipe("a", "nope")}, nil, `no repository "nope"`},
+		"same host": {nil, map[string]string{"a": repo("a", "https://dl.google.com/a", ""), "b": repo("b", "https://dl.google.com/b", "")}, "dl.google.com already has a repository"},
+		"file":      {nil, map[string]string{"a": repo("a", "https://a.example/", "[[file]]\npath = \"/etc/apt/x.list\"\ncontent = \"\"\n")}, "only /etc/default/<name>"},
+		"name":      {nil, map[string]string{"a": repo("b", "https://a.example/", "")}, "does not match the file"},
+		"fpr":       {nil, map[string]string{"a": strings.Replace(repo("a", "https://a.example/", ""), "DBF1A116", "dbf1a116", 1)}, "uppercase hex"},
+		"http":      {nil, map[string]string{"a": repo("a", "http://a.example/", "")}, "https"},
+		"flat":      {nil, map[string]string{"a": strings.Replace(repo("a", "https://a.example/", ""), `suite = "stable"`, `suite = "./"`, 1)}, "none for a flat suite"},
+		"scripts":   {map[string]string{"a": recipe("a", "brave") + "[scripts]\npostinst = \"\"\n"}, map[string]string{"brave": brave}, "only for a repacked repository"},
+		"repack":    {map[string]string{"a": strings.Replace(recipe("a", "op"), `packages = ["a"]`, `packages = ["b"]`, 1)}, map[string]string{"op": repo("op", "https://deb.opera.com/x/", "repack = true\n")}, "must be the recipe's name"},
+		"config":    {map[string]string{"a": recipe("a", "op") + "[scripts]\nconfig = \"x\"\n"}, map[string]string{"op": repo("op", "https://deb.opera.com/x/", "repack = true\n")}, "config can only be dropped"},
+	}
+	for name, c := range cases {
+		if _, err := load(c.recipes, c.repos); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

@@ -152,8 +152,8 @@ func note(r *catalog.Recipe) string {
 	switch {
 	case len(r.Conflicts) > 0:
 		return "pair: " + strings.Join(r.Conflicts, ", ")
-	case r.Repository != nil:
-		if u, err := url.Parse(r.Repository.URI); err == nil {
+	case r.Repo != nil:
+		if u, err := url.Parse(r.Repo.URI); err == nil {
 			return u.Host + " repository"
 		}
 	}
@@ -290,8 +290,8 @@ func source(r *catalog.Recipe) string {
 	switch {
 	case len(r.Sources) > 0:
 		return r.Sources[0].URL
-	case r.Repository != nil:
-		return r.Repository.URI
+	case r.Repo != nil:
+		return r.Repo.URI
 	case r.SourcePackage != "":
 		return "Debian testing: " + r.SourcePackage
 	case len(r.Packages) > 0:

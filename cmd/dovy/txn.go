@@ -51,6 +51,7 @@ type txn struct {
 	kept     []ui.Pair                            // Kept (12.2)
 	keepFor  func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
 	notes    []*catalog.Recipe                    // per-user steps after install
+	prebuilt map[string]string                    // recipe → .deb already built (vendor .debs, repacks)
 	leftover string                               // notice after remove (4.7)
 
 	tmp      string
@@ -289,11 +290,19 @@ func (a *app) run(t *txn) int {
 	// the user's cache, and planned as itself.
 	var stubs []string
 	for _, r := range t.build {
+		if d := t.prebuilt[r.Name]; d != "" {
+			stubs = append(stubs, d)
+			continue
+		}
 		if build.IsDeb(r) {
 			cache, err := build.CacheDir()
 			if err == nil {
 				var d string
 				if d, err = build.Recipe(r, t.release, cache); err == nil {
+					if t.prebuilt == nil {
+						t.prebuilt = map[string]string{}
+					}
+					t.prebuilt[r.Name] = d
 					stubs = append(stubs, d)
 					continue
 				}
@@ -445,9 +454,11 @@ func (a *app) run(t *txn) int {
 	var debs []string
 	for _, r := range t.build {
 		a.out.Rule("", "Build: "+r.Name)
-		d, err := build.Recipe(r, t.release, cache)
-		if err != nil {
-			return fail(err.Error(), "unchanged", "report it to the recipe's maintainer: "+r.Maintainer)
+		d := t.prebuilt[r.Name]
+		if d == "" {
+			if d, err = build.Recipe(r, t.release, cache); err != nil {
+				return fail(err.Error(), "unchanged", "report it to the recipe's maintainer: "+r.Maintainer)
+			}
 		}
 		fmt.Fprintln(logf, "Built: "+d)
 		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)", r.Package(), t.versions[r.Package()]))
