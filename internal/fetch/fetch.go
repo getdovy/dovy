@@ -69,3 +69,16 @@ func hashOf(path string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+// Size asks the server for url's size; -1 when it does not say.
+func Size(url string) int64 {
+	resp, err := Client.Head(url)
+	if err != nil {
+		return -1
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return -1
+	}
+	return resp.ContentLength
+}

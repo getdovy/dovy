@@ -164,6 +164,10 @@ func run(args []string, a *app, euid int) int {
 		return exitRefused
 	}
 	switch args[0] {
+	case "install":
+		return a.install(rest)
+	case "remove":
+		return a.remove(rest)
 	case "update":
 		return a.update()
 	case "list":

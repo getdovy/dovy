@@ -126,3 +126,16 @@ func (u *UI) Confirm(in io.Reader) bool {
 	a = strings.ToLower(strings.TrimSpace(a))
 	return a == "y" || a == "yes"
 }
+
+// Bytes formats a size: 412 KiB, 4.2 MiB.
+func Bytes(n int64) string {
+	switch {
+	case n < 1024:
+		return strconv.FormatInt(n, 10) + " B"
+	case n < 1024*1024:
+		return strconv.FormatInt((n+512)/1024, 10) + " KiB"
+	case n < 1024*1024*1024:
+		return strconv.FormatFloat(float64(n)/(1024*1024), 'f', 1, 64) + " MiB"
+	}
+	return strconv.FormatFloat(float64(n)/(1024*1024*1024), 'f', 1, 64) + " GiB"
+}
