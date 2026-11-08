@@ -8,37 +8,33 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/build"
 	"github.com/getdovy/dovy/internal/catalog"
-	"github.com/getdovy/dovy/internal/log"
-	"github.com/getdovy/dovy/internal/repo"
-	"github.com/getdovy/dovy/internal/state"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
 // pkgInfo is an installed package as dpkg knows it.
 type pkgInfo struct {
-	Version, Recipe string
-	Size            int64 // bytes
+	Version, Recipe, Capability string
+	Size                        int64 // bytes
 }
 
 // dpkgInstalled lists installed packages with dovy's field (3.3).
 func dpkgInstalled() (map[string]pkgInfo, error) {
-	out, err := exec.Command("dpkg-query", "-W", "-f", "${Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${db:Status-Abbrev}\n").Output()
+	out, err := exec.Command("dpkg-query", "-W", "-f", "${Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${db:Status-Abbrev}\n").Output()
 	if err != nil {
 		return nil, fmt.Errorf("dpkg-query: %w", err)
 	}
 	m := map[string]pkgInfo{}
 	for _, l := range strings.Split(string(out), "\n") {
 		f := strings.Split(l, "\t")
-		if len(f) != 5 || !strings.HasPrefix(f[4], "ii") {
+		if len(f) != 6 || !strings.HasPrefix(f[5], "ii") {
 			continue
 		}
 		kib, _ := strconv.ParseInt(f[2], 10, 64)
-		m[f[0]] = pkgInfo{f[1], f[3], kib * 1024}
+		m[f[0]] = pkgInfo{f[1], f[3], f[4], kib * 1024}
 	}
 	return m, nil
 }
@@ -100,193 +96,65 @@ func (a *app) remove(names []string) int {
 			byRecipe[i.Recipe] = p
 		}
 	}
-	pkgs := map[string]bool{}
-	var dovy []string
+	t := &txn{verb: "remove", names: names, versions: map[string]string{}, removing: map[string]string{},
+		down: map[string]bool{}, inst: inst}
 	for _, n := range names {
 		p, ok := byRecipe[n]
 		if !ok {
 			a.errs.Fail(n+" is not installed", "unchanged", "dovy list --installed", "")
 			return exitFailed
 		}
-		pkgs[p] = true
-		dovy = append(dovy, p)
+		t.removing[p] = "purged"
+		t.request = append(t.request, p+"-")
 	}
-	sort.Strings(dovy)
 	// A recipe still needed by another installed recipe stays (4.8).
 	for r, p := range byRecipe {
-		if pkgs[p] || rs[r] == nil {
+		if _, gone := t.removing[p]; gone || rs[r] == nil {
 			continue
 		}
 		for _, d := range rs[r].Depends {
-			if p2, ok := byRecipe[d]; ok && pkgs[p2] {
+			if p2, ok := byRecipe[d]; ok && t.removing[p2] != "" {
 				a.errs.Refuse(d, "needed by "+r, "")
 				return exitRefused
 			}
 		}
 	}
-
-	// Resolve: what removing dovy's packages leaves unused.
-	base, err := apt.Simulate("autoremove")
-	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
-		return exitFailed
-	}
-	var before []string
-	for _, x := range apt.Parse(base) {
-		before = append(before, x.Name)
-	}
-	out, err := apt.Simulate(append([]string{"remove"}, dovy...)...)
-	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
-		return exitFailed
-	}
-	deps := unused(before, apt.NoLongerRequired(out), pkgs)
-	all := append(append([]string{}, dovy...), deps...)
-
-	// apt's own plan for the transaction must match exactly (4.3).
-	out, err = apt.Simulate(append([]string{"remove"}, all...)...)
-	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
-		return exitFailed
-	}
-	want := map[string]bool{}
-	for _, n := range all {
-		want[n] = true
-	}
-	var extra []string
-	for _, x := range apt.Parse(out) {
-		if x.Op == "Inst" || !want[x.Name] {
-			extra = append(extra, x.Op+" "+x.Name)
-		}
-	}
-	if len(extra) > 0 {
-		a.errs.Refuse(strings.Join(names, " "), "apt would change packages not in the plan", strings.Join(extra, ", "))
-		return exitRefused
-	}
-
-	// Plan (12.1, 12.2).
-	var freed int64
-	row := func(p, note string) ui.Row {
-		i := inst[p]
-		freed += i.Size
-		src := "Debian"
-		if i.Recipe != "" {
-			src = "dovy"
-		}
-		return ui.Row{Name: p, Version: i.Version, Source: src, Size: ui.Bytes(i.Size), Note: note}
-	}
-	var rm, rmDeps []ui.Row
-	for _, p := range dovy {
-		rm = append(rm, row(p, "purged"))
-	}
-	configs := 0
-	for _, p := range deps {
-		rmDeps = append(rmDeps, row(p, ""))
-		if leavesConfig(p) {
-			configs++
-		}
-	}
-	secs := []ui.Section{{Color: ui.Red, Title: "Removing", Rows: rm}}
-	counts := []ui.Count{{Verb: "Remove", N: len(rm), Unit: plural(len(rm), "package")}}
-	if len(rmDeps) > 0 {
-		secs = append(secs, ui.Section{Color: ui.Red, Title: "Removing unused dependencies", Rows: rmDeps})
-		counts = append(counts, ui.Count{Verb: "Dependencies", N: len(rmDeps), Unit: plural(len(rmDeps), "package")})
-	}
-	kept := a.kept(names, rs, inst, want)
-	if configs > 0 {
-		kept = append(kept, ui.Pair{Item: fmt.Sprintf("config of %d %s", configs, plural(configs, "package")), Reason: "in /etc; apt purge removes it"})
-	}
-	a.out.Blank()
-	a.out.Plan(secs)
-	if len(kept) > 0 {
-		a.out.Pairs(ui.Cyan, "Kept", kept)
-	}
-	a.out.Summary(counts, []ui.Pair{{Item: "Disk freed", Reason: ui.Bytes(freed)}})
-	a.out.Blank()
-	if !a.out.Confirm(a.in) {
-		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
-		return exitCancelled
-	}
-
-	stop, err := a.sudo()
-	if err != nil {
-		a.errs.Fail("sudo: "+err.Error(), "unchanged", "dovy remove again", "")
-		return exitFailed
-	}
-	defer stop()
-	lock, code := a.lock()
-	if code != exitOK {
-		return code
-	}
-	defer lock.Close()
 	tmp, err := os.MkdirTemp("", "dovy-")
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
-	logf, err := log.Open(tmp, time.Now())
-	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
-		return exitFailed
-	}
-	defer logf.Close()
-	logPath := filepath.Join(log.Dir, filepath.Base(logf.Name()))
-	defer func() {
-		logf.Sync()
-		a.root("install", "-D", "-m", "644", logf.Name(), logPath)
-	}()
+	t.tmp = tmp
 
-	// Journal, one apt transaction, then dovy's config files (4.4).
-	a.out.Rule("", "Remove")
-	j := &state.Journal{Command: "remove", Recipes: names, Started: time.Now().UTC()}
-	for _, p := range all {
-		j.Packages = append(j.Packages, state.Package{Name: p, Version: inst[p].Version})
-	}
-	jp, err := j.Encode(tmp)
-	if err == nil {
-		err = a.root("install", "-m", "644", jp, state.JournalPath(state.Dir))
-	}
+	// Backports packages that stay installed return to stable (4.6); those
+	// left unused go with the recipe (4.1).
+	out, err := apt.Simulate(nil, t.args(nil)...)
 	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "dovy remove again", logPath)
+		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
 		return exitFailed
 	}
-	versions := map[string]string{}
-	for _, p := range all {
-		versions[p] = inst[p].Version
+	leaving := map[string]bool{}
+	for _, n := range apt.NoLongerRequired(out) {
+		leaving[n] = true
 	}
-	if err := apt.Run(logf, a.aptLine(versions), append(append([]string{"remove", "-y"}, apt.Options...), all...)...); err != nil {
-		a.errs.Fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a", logPath)
-		return exitFailed
-	}
-	for _, p := range dovy {
-		if !configOnly(p) {
-			continue
-		}
-		fmt.Fprintln(logf, "dpkg --purge "+p)
-		cmd := exec.Command("sudo", "--", "dpkg", "--purge", p)
-		cmd.Stdout, cmd.Stderr = logf, logf
-		if err := cmd.Run(); err != nil {
-			a.errs.Fail(err.Error(), "removed; config of "+p+" left", "sudo dpkg --purge "+p, logPath)
-			return exitFailed
-		}
-		a.out.Say(ui.Red, "Purging:", p+" ("+inst[p].Version+")")
-	}
-	a.root("rm", "-f", state.JournalPath(state.Dir))
-	if err := repo.Update(repo.Dir, nil, dovy, a.root); err != nil {
-		a.out.Say(ui.Yellow, "Warning:", "local repository: "+err.Error())
-	}
-	if cache, err := build.CacheDir(); err == nil {
-		for _, n := range names {
-			if r := rs[n]; r != nil {
-				for _, s := range r.Sources {
-					os.Remove(filepath.Join(cache, "sources", s.SHA256))
-				}
-			}
+	var others []string // packages of backports recipes that stay
+	for r, p := range byRecipe {
+		if _, gone := t.removing[p]; !gone && rs[r] != nil && rs[r].Backports {
+			others = append(others, rs[r].Packages...)
 		}
 	}
-	a.out.Blank()
+	for _, n := range names {
+		if r := rs[n]; r != nil && r.Backports {
+			t.leaveBackports(r.Packages, others, inst, leaving)
+		}
+	}
 
+	removing := map[string]bool{}
+	for p := range t.removing {
+		removing[p] = true
+	}
+	t.kept = a.kept(names, rs, inst, removing)
 	var notes []string
 	for _, n := range names {
 		if r := rs[n]; r != nil && r.UserNotes != "" {
@@ -294,12 +162,21 @@ func (a *app) remove(names []string) int {
 		}
 	}
 	if len(notes) > 0 {
-		a.out.Rule(ui.Yellow, "Notices")
-		fmt.Fprintln(a.out.Out, "  Per-user lines added for "+strings.Join(notes, ", ")+" stay in ~/.bashrc; they do nothing now.")
-		a.out.Blank()
+		t.leftover = "Per-user lines added for " + strings.Join(notes, ", ") + " stay in ~/.bashrc; they do nothing now."
 	}
-	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Done.")+" "+strings.Join(names, ", ")+" removed.")
-	return exitOK
+	code = a.run(t)
+	if code == exitOK {
+		if cache, err := build.CacheDir(); err == nil {
+			for _, n := range names {
+				if r := rs[n]; r != nil {
+					for _, s := range r.Sources {
+						os.Remove(filepath.Join(cache, "sources", s.SHA256))
+					}
+				}
+			}
+		}
+	}
+	return code
 }
 
 // kept lists the recipes' Debian packages that stay, and why (12.2).

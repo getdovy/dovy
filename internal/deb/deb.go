@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 )
 
@@ -19,7 +20,7 @@ const Arch = "amd64"
 
 // ArchOf is the package architecture: setup packages hold no binaries.
 func ArchOf(r *catalog.Recipe) string {
-	if r.Kind == catalog.Setup {
+	if r.Kind == catalog.Setup || r.Kind == capability.Kind {
 		return "all"
 	}
 	return Arch
@@ -108,9 +109,16 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 
 // Control is the package's control file; size is in KiB.
 func Control(r *catalog.Recipe, version string, size int64) string {
-	var deps string
+	var rel string
 	if len(r.Packages) > 0 {
-		deps = "Depends: " + strings.Join(r.Packages, ", ") + "\n"
+		rel += "Depends: " + strings.Join(r.Packages, ", ") + "\n"
+	}
+	if len(r.Conflicts) > 0 {
+		rel += "Conflicts: " + strings.Join(r.Conflicts, ", ") + "\n"
+	}
+	field := "X-Dovy-Recipe"
+	if r.Kind == capability.Kind {
+		field = "X-Dovy-Capability"
 	}
 	return fmt.Sprintf(`Package: %s
 Version: %s
@@ -119,9 +127,9 @@ Maintainer: %s
 Installed-Size: %d
 %sSection: misc
 Priority: optional
-X-Dovy-Recipe: %s
+%s: %s
 Description: %s
-`, r.Package(), version, ArchOf(r), r.Maintainer, size, deps, r.Name, r.Description)
+`, r.Package(), version, ArchOf(r), r.Maintainer, size, rel, field, r.Name, r.Description)
 }
 
 // conffiles lists the staged files dpkg keeps when the user edits them (8.5).
