@@ -161,6 +161,38 @@ maintainer = "test"
 debian = [13]
 packages = ["postfix"]
 EOF
+mesa='packages = ["mesa-vulkan-drivers", "libgl1-mesa-dri", "libglx-mesa0", "libegl-mesa0", "libgbm1", "mesa-va-drivers", "mesa-libgallium"]'
+recipe mesa <<EOF
+name = "mesa"
+description = "Mesa graphics drivers from Debian stable"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+conflicts = ["mesa-backports"]
+$mesa
+EOF
+recipe mesa-backports <<EOF
+name = "mesa-backports"
+description = "Mesa graphics drivers from Debian backports"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+conflicts = ["mesa"]
+backports = true
+$mesa
+EOF
+recipe kernel-backports <<'EOF'
+name = "kernel-backports"
+description = "Debian's signed kernel from backports"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+backports = true
+packages = ["linux-image-amd64", "linux-headers-amd64"]
+EOF
 commit "install recipes"
 T5=catalog-2026.04.10.1
 tag trusted $T5
