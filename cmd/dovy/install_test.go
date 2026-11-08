@@ -39,28 +39,64 @@ func simulated(t *testing.T, name string) []apt.Action {
 	return apt.Parse(string(b))
 }
 
-func TestSurpriseAndSame(t *testing.T) {
-	if s := surprise(simulated(t, "sim-install.txt")); len(s) != 0 {
-		t.Errorf("install: %v", s)
+func TestCheck(t *testing.T) {
+	tx := &txn{actions: simulated(t, "sim-install.txt"), removing: map[string]string{}, down: map[string]bool{}}
+	if s, k := tx.check(); len(s) != 0 || k != "" {
+		t.Errorf("install: %v %q", s, k)
 	}
-	s := surprise(simulated(t, "sim-surprise.txt"))
-	if len(s) != 3 || s[0] != "exim4-daemon-light 4.98.2-1+deb13u5" {
+	tx.actions = simulated(t, "sim-surprise.txt")
+	if s, _ := tx.check(); len(s) != 3 || s[0] != "removes exim4-daemon-light 4.98.2-1+deb13u5" {
 		t.Errorf("surprise: %v", s)
 	}
+	// A pair partner's removal is planned, not a surprise.
+	tx.removing = map[string]string{"exim4-daemon-light": "", "exim4-config": "", "exim4-base": ""}
+	if s, _ := tx.check(); len(s) != 0 {
+		t.Errorf("planned removal: %v", s)
+	}
+	tx = &txn{actions: simulated(t, "sim-downgrade.txt"), removing: map[string]string{}, down: map[string]bool{}}
+	if s, _ := tx.check(); len(s) != 7 {
+		t.Errorf("unplanned downgrades: %v", s)
+	}
+	for _, p := range []string{"libgl1-mesa-dri", "libegl-mesa0", "libglx-mesa0", "libgbm1", "mesa-libgallium", "mesa-va-drivers", "mesa-vulkan-drivers"} {
+		tx.down[p] = true
+	}
+	if s, _ := tx.check(); len(s) != 0 {
+		t.Errorf("planned downgrades: %v", s)
+	}
+}
+
+func TestRunningKernel(t *testing.T) {
+	kernelRelease = "7.2.12+bpo-amd64"
+	defer func() { kernelRelease = "" }()
+	tx := &txn{removing: map[string]string{"dovy-kernel-backports": "purged"}, unused: map[string]bool{"linux-image-7.2.12+bpo-amd64": true},
+		actions: apt.Parse("Remv dovy-kernel-backports [1-1~dovy13]\nRemv linux-image-7.2.12+bpo-amd64 [7.2.12-1~bpo13+1]\n")}
+	if _, k := tx.check(); k != "linux-image-7.2.12+bpo-amd64" {
+		t.Errorf("running kernel removal not caught: %q", k)
+	}
+	kernelRelease = "6.12.107+deb13-amd64"
+	if _, k := tx.check(); k != "" {
+		t.Errorf("other kernel refused: %q", k)
+	}
+}
+
+func TestSame(t *testing.T) {
 	a := simulated(t, "sim-install.txt")
 	b := append([]apt.Action{a[len(a)-1]}, a[:len(a)-1]...) // order differs
-	if !same(a, b) {
+	if !same(a, b, nil) {
 		t.Error("reordered plan differs")
 	}
 	b[0].Version = "1-2~dovy13"
-	if same(a, b) {
+	if same(a, b, nil) {
 		t.Error("changed version not caught")
+	}
+	if !same(a, b, map[string]bool{"dovy-cli-tools": true}) {
+		t.Error("skipped package compared")
 	}
 }
 
 func TestSections(t *testing.T) {
-	p := &plan{versions: map[string]string{"dovy-cli-tools": "1-1~dovy13"}, actions: simulated(t, "sim-install.txt")}
-	secs, counts, totals := p.sections(map[string]apt.Size{"ripgrep": {Download: 1433568, Installed: 5278 * 1024}}, nil)
+	tx := &txn{versions: map[string]string{"dovy-cli-tools": "1-1~dovy13"}, actions: simulated(t, "sim-install.txt")}
+	secs, counts, totals := tx.sections(map[string]apt.Size{"ripgrep": {Download: 1433568, Installed: 5278 * 1024}}, nil)
 	if len(secs) != 2 || secs[0].Title != "Installing" || len(secs[0].Rows) != 1 || len(secs[1].Rows) != 16 {
 		t.Fatalf("got %+v", secs)
 	}
@@ -75,6 +111,17 @@ func TestSections(t *testing.T) {
 	u.Plan(secs)
 	if !strings.Contains(b.String(), "  dovy-cli-tools     1-1~dovy13") || !strings.Contains(b.String(), "ripgrep") {
 		t.Errorf("plan:\n%s", b.String())
+	}
+
+	tx = &txn{versions: map[string]string{}, actions: simulated(t, "sim-downgrade.txt"), down: map[string]bool{},
+		inst: map[string]pkgInfo{"libgbm1": {Version: "26.1.6-1~bpo13+1", Size: 50 << 10}}}
+	secs, _, totals = tx.sections(map[string]apt.Size{"libgbm1": {Download: 45 << 10, Installed: 44 << 10}}, nil)
+	if totals[1] != (ui.Pair{Item: "Disk freed", Reason: "6 KiB"}) {
+		t.Errorf("downgrade disk %+v", totals)
+	}
+	if len(secs) != 2 || secs[0].Title != "Installing dependencies" || secs[1].Title != "Downgrading" || len(secs[1].Rows) != 7 ||
+		secs[1].Rows[0].Note != "from 26.1.6-1~bpo13+1" {
+		t.Errorf("downgrades %+v", secs)
 	}
 }
 

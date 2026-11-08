@@ -5,18 +5,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/build"
+	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
-	"github.com/getdovy/dovy/internal/fetch"
-	"github.com/getdovy/dovy/internal/log"
-	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/state"
 	"github.com/getdovy/dovy/internal/ui"
 )
@@ -51,83 +48,8 @@ func resolve(rs map[string]*catalog.Recipe, names []string) ([]*catalog.Recipe, 
 	return order, ""
 }
 
-// plan is what install will do, from apt's simulation.
-type plan struct {
-	recipes  []*catalog.Recipe
-	versions map[string]string // dovy package → version
-	actions  []apt.Action
-}
-
-// sections turns the plan into the tables of topic 12, rule 1.
-func (p *plan) sections(sizes map[string]apt.Size, sources map[string]int64) ([]ui.Section, []ui.Count, []ui.Pair) {
-	var ins, deps []ui.Row
-	var download, disk int64
-	for _, a := range p.actions {
-		if a.Op != "Inst" {
-			continue
-		}
-		size := "—"
-		if _, ok := p.versions[a.Name]; ok {
-			if n := sources[a.Name]; n > 0 {
-				size, download, disk = ui.Bytes(n), download+n, disk+n
-			}
-			ins = append(ins, ui.Row{Name: a.Name, Version: a.Version, Source: "dovy", Size: size})
-			continue
-		}
-		if s, ok := sizes[a.Name]; ok {
-			size, download, disk = ui.Bytes(s.Download), download+s.Download, disk+s.Installed
-		}
-		row := ui.Row{Name: a.Name, Version: a.Version, Source: a.Origin, Size: size}
-		if a.Old != "" {
-			row.Note = "upgrades " + a.Old
-		}
-		deps = append(deps, row)
-	}
-	var secs []ui.Section
-	var counts []ui.Count
-	if len(ins) > 0 {
-		secs = append(secs, ui.Section{Color: ui.Green, Title: "Installing", Rows: ins})
-		counts = append(counts, ui.Count{Verb: "Install", N: len(ins), Unit: plural(len(ins), "package")})
-	}
-	if len(deps) > 0 {
-		secs = append(secs, ui.Section{Color: ui.Green, Title: "Installing dependencies", Rows: deps})
-		counts = append(counts, ui.Count{Verb: "Dependencies", N: len(deps), Unit: plural(len(deps), "package")})
-	}
-	totals := []ui.Pair{{Item: "Download", Reason: ui.Bytes(download)}, {Item: "Disk required", Reason: ui.Bytes(disk)}}
-	return secs, counts, totals
-}
-
-func plural(n int, s string) string {
-	if n == 1 {
-		return s
-	}
-	return s + "s"
-}
-
-// surprise lists what apt would remove: an install plan removes nothing (4.3).
-func surprise(as []apt.Action) []string {
-	var out []string
-	for _, a := range as {
-		if a.Op == "Remv" || a.Op == "Purg" {
-			out = append(out, a.Name+" "+a.Old)
-		}
-	}
-	return out
-}
-
-// same reports whether two simulations install the same packages.
-func same(a, b []apt.Action) bool {
-	key := func(as []apt.Action) string {
-		var s []string
-		for _, x := range as {
-			s = append(s, x.Op+" "+x.Name+" "+x.Version)
-		}
-		sort.Strings(s)
-		return strings.Join(s, "\n")
-	}
-	return key(a) == key(b)
-}
-
+// install plans recipes and their depends, with capabilities, pins and
+// pairs (principles 1.4, 5).
 func (a *app) install(names []string) int {
 	if code := a.unfinished(); code != exitOK {
 		return code
@@ -143,16 +65,28 @@ func (a *app) install(names []string) int {
 		return exitFailed
 	}
 	release, err := deb.Release("/etc/os-release")
+	if err == nil {
+		_, err = capability.Codename("/etc/os-release")
+	}
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "dovy runs on Debian stable", "")
 		return exitFailed
 	}
-	inst, err := a.installed()
+	codename, _ := capability.Codename("/etc/os-release")
+	inst, err := dpkgInstalled()
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
 		return exitFailed
 	}
-	p := &plan{versions: map[string]string{}}
+	byRecipe := map[string]string{}
+	for p, i := range inst {
+		if i.Recipe != "" {
+			byRecipe[i.Recipe] = p
+		}
+	}
+	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
+		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
+	needBackports := []string{}
 	for _, r := range order {
 		if !build.Buildable(r) {
 			a.errs.Refuse(r.Name, "kind "+r.Kind+" is not built yet", "")
@@ -163,206 +97,155 @@ func (a *app) install(names []string) int {
 			return exitRefused
 		}
 		v := deb.Version(r, release)
-		if inst[r.Name] == v {
+		if p, ok := byRecipe[r.Name]; ok && inst[p].Version == v {
 			continue
 		}
-		p.recipes = append(p.recipes, r)
-		p.versions[r.Package()] = v
+		t.names = append(t.names, r.Name)
+		t.build = append(t.build, capability.Expand(r, rs, codename))
+		t.versions[r.Package()] = v
+		if r.UserNotes != "" {
+			t.notes = append(t.notes, r)
+		}
+		if r.Backports {
+			needBackports = append(needBackports, r.Name)
+			for _, p := range r.Packages {
+				t.request = append(t.request, p+"/"+codename+"-backports")
+			}
+		}
 	}
-	if len(p.recipes) == 0 {
+	if len(t.build) == 0 {
 		fmt.Fprintln(a.out.Out, "Nothing to do: "+strings.Join(names, ", ")+" already installed.")
 		return exitOK
 	}
-
-	// One dovy at a time (8.4). Before dovy's own .deb exists the folder may
-	// be missing; then the lock is taken after the sudo prompt.
-	var lock *os.File
-	if _, err := os.Stat(state.Dir); err == nil {
-		if lock, code = a.lock(); code != exitOK {
-			return code
-		}
-		defer lock.Close()
-	}
-
 	tmp, err := os.MkdirTemp("", "dovy-")
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
+	t.tmp = tmp
 
-	// Resolve packages: apt simulates with control-only stubs (8.3).
-	var stubs []string
-	for _, r := range p.recipes {
-		stage := filepath.Join(tmp, "stage", r.Name)
-		if err := os.MkdirAll(stage, 0o755); err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
-			return exitFailed
-		}
-		s, err := deb.Build(r, p.versions[r.Package()], stage, filepath.Join(tmp, "stubs"))
-		if err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "check that dpkg-deb works", "")
-			return exitFailed
-		}
-		stubs = append(stubs, s)
-	}
-	out, err := apt.Simulate(append([]string{"install"}, stubs...)...)
-	if err != nil {
-		a.errs.Refuse(strings.Join(names, " "), "apt cannot install it", err.Error())
-		return exitRefused
-	}
-	p.actions = apt.Parse(out)
-	if s := surprise(p.actions); len(s) > 0 {
-		a.errs.Refuse(strings.Join(names, " "), "apt would remove packages not in the plan", strings.Join(s, ", "))
-		return exitRefused
-	}
-
-	// Plan, confirm (12.1, 12.2).
-	debian := map[string]string{}
-	for _, x := range p.actions {
-		if x.Op == "Inst" && x.Origin != "dovy" {
-			debian[x.Name] = x.Version
-		}
-	}
-	sources := map[string]int64{}
-	for _, r := range p.recipes {
-		for _, s := range r.Sources {
-			if n := fetch.Size(s.URL); n > 0 {
-				sources[r.Package()] += n
-			}
-		}
-	}
-	secs, counts, totals := p.sections(apt.Sizes(debian), sources)
-	a.out.Blank()
-	a.out.Plan(secs)
-	a.out.Summary(counts, totals)
-	a.out.Blank()
-	if !a.out.Confirm(a.in) {
-		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
-		return exitCancelled
-	}
-
-	// sudo once, kept fresh for the run (8.11).
-	stop, err := a.sudo()
-	if err != nil {
-		a.errs.Fail("sudo: "+err.Error(), "unchanged", "dovy install again", "")
-		return exitFailed
-	}
-	defer stop()
-	if lock == nil {
-		if err := a.root("install", "-d", "-m", "755", state.Dir); err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "dovy install again", "")
-			return exitFailed
-		}
-		if lock, code = a.lock(); code != exitOK {
-			return code
-		}
-		defer lock.Close()
-	}
-	logf, err := log.Open(tmp, time.Now())
-	if err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
-		return exitFailed
-	}
-	defer logf.Close()
-	logPath := filepath.Join(log.Dir, filepath.Base(logf.Name()))
-	keepLog := func() {
-		logf.Sync()
-		a.root("install", "-D", "-m", "644", logf.Name(), logPath)
-	}
-	defer keepLog()
-	fail := func(failed, system, next string) int {
-		fmt.Fprintln(logf, "Failed: "+failed)
-		a.errs.Fail(failed, system, next, logPath)
-		return exitFailed
-	}
-
-	// Download (12.3).
-	a.out.Rule("", "Download")
-	cache, err := build.CacheDir()
-	if err != nil {
-		return fail(err.Error(), "unchanged", "set HOME or XDG_CACHE_HOME")
-	}
-	for _, r := range p.recipes {
-		for _, s := range r.Sources {
-			path, err := fetch.Get(s.URL, s.SHA256, filepath.Join(cache, "sources"))
+	// Capability: Debian backports, built from the system's sources (5.4).
+	if len(needBackports) > 0 {
+		if _, ok := inst[capability.Backports]; !ok {
+			src, present, err := capability.BackportsSource(capability.System("/etc/apt"), codename)
 			if err != nil {
-				return fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "))
+				a.errs.Fail(err.Error(), "unchanged", "add Debian's "+codename+" source to /etc/apt", "")
+				return exitFailed
 			}
-			fi, _ := os.Stat(path)
-			a.out.Say(ui.Green, "Fetched:", fmt.Sprintf("%s [%s] sha256 ok", filepath.Base(s.URL), ui.Bytes(fi.Size())))
+			c := capability.BackportsRecipe(src)
+			t.build = append([]*catalog.Recipe{c}, t.build...)
+			t.versions[c.Package()] = deb.Version(c, release)
+			t.caps[c.Package()] = true
+			if !present {
+				if err := t.withSource("dovy-backports.sources", src); err != nil {
+					a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
+					return exitFailed
+				}
+			}
+			t.system = append(t.system, ui.Pair{Item: "Debian backports", Reason: strings.Join(needBackports, ", ")})
 		}
 	}
-	if len(debian) > 0 {
-		args := append(append([]string{"install", "--download-only", "-y"}, apt.Options...), pkgArgs(debian)...)
-		if err := apt.Run(logf, a.aptLine(nil), args...); err != nil {
-			return fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "))
+
+	// Pairs: the other half goes, and its backports packages return to
+	// stable unless this half keeps them on backports (1.4, 4.6).
+	for _, x := range t.build {
+		r := rs[x.Name]
+		if r == nil {
+			continue
+		}
+		for _, c := range r.Conflicts {
+			p, ok := byRecipe[c]
+			if !ok {
+				continue
+			}
+			t.removing[p] = "replaced by " + r.Name
+			t.request = append(t.request, p+"-")
+			if o := rs[c]; o != nil && o.Backports && !r.Backports {
+				t.leaveBackports(o.Packages, nil, inst, nil)
+			}
 		}
 	}
-	a.out.Blank()
+	return a.run(t)
+}
 
-	// Build (12.3), into the local repository.
-	var debs []string
-	for _, r := range p.recipes {
-		a.out.Rule("", "Build: "+r.Name)
-		d, err := build.Recipe(r, release, cache)
-		if err != nil {
-			return fail(err.Error(), "unchanged", "report it to the recipe's maintainer: "+r.Maintainer)
+// leaveBackports undoes a backports recipe (4.6): its packages, and the
+// automatic backports packages they brought, return to stable; those with no
+// stable version (a versioned kernel) or nothing left using them are
+// removed. Packages that other backports recipes still use are skipped.
+func (t *txn) leaveBackports(pinned, others []string, inst map[string]pkgInfo, leaving map[string]bool) {
+	manual := map[string]bool{}
+	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
+		for _, n := range strings.Fields(string(out)) {
+			manual[n] = true
 		}
-		fmt.Fprintln(logf, "Built: "+d)
-		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)", r.Package(), p.versions[r.Package()]))
-		debs = append(debs, d)
-		a.out.Blank()
 	}
-	if err := repo.Publish(repo.Dir, debs, a.root); err != nil {
-		return fail(err.Error(), "unchanged", "dovy install again")
+	keep := map[string]bool{}
+	for _, p := range installedDeps(others) {
+		keep[p] = true
 	}
+	var pkgs []string
+	for _, p := range installedDeps(pinned) {
+		i, ok := inst[p]
+		if !ok || keep[p] || !strings.Contains(i.Version, "~bpo") {
+			continue
+		}
+		if leaving[p] { // unused once the recipe goes: removed, named
+			t.removing[p] = "from backports"
+			t.request = append(t.request, p+"-")
+			continue
+		}
+		if manual[p] && !contains(pinned, p) {
+			continue // the user's own backports package
+		}
+		pkgs = append(pkgs, p)
+	}
+	stable := apt.Stable(t.opts, pkgs)
+	for _, p := range pkgs {
+		if v := stable[p]; v != "" {
+			t.down[p] = true
+			t.request = append(t.request, p+"="+v)
+		} else {
+			t.removing[p] = "from backports"
+			t.request = append(t.request, p+"-")
+		}
+	}
+}
 
-	// Journal, then one apt transaction (8.3).
-	a.out.Rule("", "Install")
-	j := &state.Journal{Command: "install", Started: time.Now().UTC()}
-	for _, r := range p.recipes {
-		j.Recipes = append(j.Recipes, r.Name)
+// installedDeps is pkgs and everything installed they depend on.
+func installedDeps(pkgs []string) []string {
+	if len(pkgs) == 0 {
+		return nil
 	}
-	for n, v := range p.versions {
-		j.Packages = append(j.Packages, state.Package{Name: n, Version: v})
+	args := append([]string{"depends", "--recurse", "--installed", "--no-recommends", "--no-suggests",
+		"--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances"}, pkgs...)
+	out, _ := exec.Command("apt-cache", args...).Output()
+	seen := map[string]bool{}
+	var deps []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if l == "" || l[0] == ' ' || l[0] == '<' || seen[l] {
+			continue
+		}
+		seen[l] = true
+		deps = append(deps, l)
 	}
-	jp, err := j.Encode(tmp)
-	if err == nil {
-		err = a.root("install", "-m", "644", jp, state.JournalPath(state.Dir))
-	}
-	if err != nil {
-		return fail(err.Error(), "unchanged", "dovy install again")
-	}
-	clear := func() { a.root("rm", "-f", state.JournalPath(state.Dir)) }
-	if err := apt.Run(logf, a.aptLine(nil), append([]string{"update"}, apt.Options...)...); err != nil {
-		clear()
-		return fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "))
-	}
-	dovy := pkgArgs(p.versions)
-	out, err = apt.Simulate(append([]string{"install"}, dovy...)...)
-	if err != nil || !same(apt.Parse(out), p.actions) {
-		clear()
-		return fail("apt's plan changed after the build", "unchanged; built packages kept in "+repo.Dir, "dovy install "+strings.Join(names, " "))
-	}
-	versions := map[string]string{}
-	for _, x := range p.actions {
-		versions[x.Name] = x.Version
-	}
-	if err := apt.Run(logf, a.aptLine(versions), append(append([]string{"install", "-y"}, apt.Options...), dovy...)...); err != nil {
-		return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
-	}
-	clear()
-	a.out.Blank()
+	return deps
+}
 
-	// Notices (12.4).
-	a.notices(p.recipes, versions)
-	var done []string
-	for _, r := range p.recipes {
-		done = append(done, r.Name)
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
 	}
-	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Done.")+" "+strings.Join(done, ", ")+" installed.")
-	return exitOK
+	return false
+}
+
+func plural(n int, s string) string {
+	if n == 1 {
+		return s
+	}
+	return s + "s"
 }
 
 func supports(r *catalog.Recipe, release int) bool {

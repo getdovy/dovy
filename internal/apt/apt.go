@@ -37,8 +37,11 @@ func Parse(out string) []Action {
 		if i := strings.IndexAny(origin, ":,"); i >= 0 {
 			origin = origin[:i]
 		}
-		if origin == "local-deb" {
+		switch origin {
+		case "local-deb":
 			origin = "dovy"
+		case "Debian Backports":
+			origin = "Backports"
 		}
 		as = append(as, Action{Op: m[1], Name: m[2], Old: m[3], Version: m[4], Origin: origin})
 	}
@@ -62,9 +65,9 @@ func NoLongerRequired(out string) []string {
 	return names
 }
 
-// Simulate runs `apt-get -s` as the user; nothing changes.
-func Simulate(args ...string) (string, error) {
-	cmd := exec.Command("apt-get", append([]string{"-s", "-q", "-o", "Debug::NoLocking=1"}, args...)...)
+// Simulate runs `apt-get -s` as the user with extra options; nothing changes.
+func Simulate(opts []string, args ...string) (string, error) {
+	cmd := exec.Command("apt-get", append(append([]string{"-s", "-q", "-o", "Debug::NoLocking=1"}, opts...), args...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
@@ -86,11 +89,11 @@ func firstError(s string, err error) string {
 type Size struct{ Download, Installed int64 }
 
 // Sizes looks up name=version pairs with apt-cache; unknown ones are left out.
-func Sizes(pkgs map[string]string) map[string]Size {
+func Sizes(opts []string, pkgs map[string]string) map[string]Size {
 	if len(pkgs) == 0 {
 		return nil
 	}
-	args := []string{"show", "--no-all-versions"}
+	args := append(append([]string{}, opts...), "show", "--no-all-versions")
 	for n, v := range pkgs {
 		args = append(args, n+"="+v)
 	}
@@ -234,9 +237,11 @@ func Lines(r io.Reader, log io.Writer, fn func(string)) {
 }
 
 // Run runs `sudo apt-get args` and streams its output, merged, to fn and log.
-// Packages' questions still reach the user's terminal on stdin.
+// Packages' questions still reach the user's terminal on stdin. The status
+// channel is fd 3, a copy of stdout made after sudo (which closes fds above
+// 2): apt closes the status fd for maintainer scripts, so it must not be 1.
 func Run(log io.Writer, fn func(string), args ...string) error {
-	cmd := exec.Command("sudo", append([]string{"--", "apt-get"}, args...)...)
+	cmd := exec.Command("sudo", append([]string{"--", "sh", "-c", `exec apt-get "$@" 3>&1`, "apt-get"}, args...)...)
 	cmd.Stdin = os.Stdin
 	r, w := io.Pipe()
 	cmd.Stdout, cmd.Stderr = w, w
@@ -254,9 +259,9 @@ func Run(log io.Writer, fn func(string), args ...string) error {
 	return nil
 }
 
-// Options every real apt-get run gets: status lines on stdout, wait for
+// Options every real apt-get run gets: status lines on fd 3 (see Run), wait for
 // apt's lock, keep the user's changed config files (8.4, 8.5, 8.11).
 var Options = []string{
-	"-o", "APT::Status-Fd=1", "-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=-1",
+	"-o", "APT::Status-Fd=3", "-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=-1",
 	"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
 }
