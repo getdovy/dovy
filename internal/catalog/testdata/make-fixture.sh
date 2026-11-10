@@ -529,6 +529,42 @@ fi
 config = ""
 templates = ""
 EOF
+repository nvidia <<'EOF'
+name = "nvidia"
+uri = "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64"
+suite = "/"
+key-url = "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/8793F200.pub"
+fingerprints = ["02182E60104FCDC26EAE1B8597A5D4CB8793F200"]
+maintainer = "test"
+pin = false
+EOF
+recipe nvidia <<'EOF'
+name = "nvidia"
+description = "NVIDIA's open driver, from NVIDIA's repository"
+kind = "vendor-repository"
+version = "1"
+maintainer = "test"
+debian = [13]
+hardware = "nvidia-turing"
+secure-boot = "dkms"
+repository = "nvidia"
+packages = ["nvidia-open", "nvidia-driver-libs:i386", "linux-headers-amd64"]
+EOF
+recipe nvflux <<'EOF'
+name = "nvflux"
+description = "Needs nvidia; proves inherited hardware checks"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+depends = ["nvidia"]
+
+[[file]]
+path = "/etc/modprobe.d/dovy-nvflux.conf"
+content = """
+# test
+"""
+EOF
 vendor firefox mozilla firefox
 echo 'replaces = ["firefox-esr"]' >>"$tmp/repo/recipes/firefox/recipe.toml"
 # clash: Mozilla's firefox without replaces, refused where firefox-esr is.
