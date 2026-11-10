@@ -87,3 +87,22 @@ func TestTarGzRefuses(t *testing.T) {
 		t.Errorf("not gzip: %v", err)
 	}
 }
+
+func TestTarGzGlobalHeader(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.tar.gz")
+	f, _ := os.Create(p)
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, Name: "pax_global_header", PAXRecords: map[string]string{"comment": "abc"}})
+	tw.WriteHeader(&tar.Header{Name: "yad-14.2/", Typeflag: tar.TypeDir, Mode: 0o755})
+	tw.Close()
+	gz.Close()
+	f.Close()
+	dest := t.TempDir()
+	if err := TarGz(p, dest); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(dest, "yad-14.2")); err != nil || !fi.IsDir() {
+		t.Errorf("got %v %v", fi, err)
+	}
+}

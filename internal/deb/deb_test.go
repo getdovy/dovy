@@ -161,3 +161,18 @@ func TestControlCapability(t *testing.T) {
 		t.Errorf("relations:\n%s", c)
 	}
 }
+
+func TestControlReplaces(t *testing.T) {
+	r := &catalog.Recipe{Name: "firefox", Kind: catalog.VendorRepository, Maintainer: "t", Description: "Firefox",
+		Packages: []string{"firefox"}, Replaces: []string{"firefox-esr"}, Replaced: []string{"firefox-esr manual"}}
+	got := control(r, "1-1~dovy13", 1, []string{"libc6"})
+	for _, want := range []string{"Depends: firefox, libc6\n", "Conflicts: firefox-esr\n", "X-Dovy-Replaced: firefox-esr manual\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	y := &catalog.Recipe{Name: "yad", Kind: catalog.UpstreamBuild, Replaces: []string{"yad"}}
+	if c := Conflicts(y); len(c) != 0 {
+		t.Errorf("same name conflicts: %v", c)
+	}
+}

@@ -83,6 +83,11 @@ func Stage(r *catalog.Recipe, src, stage string) error {
 
 // Build writes DEBIAN/control into stage and builds the .deb into out.
 func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
+	return BuildWith(r, version, stage, out, nil)
+}
+
+// BuildWith is Build with more Depends (a source build's libraries).
+func BuildWith(r *catalog.Recipe, version, stage, out string, depends []string) (string, error) {
 	size, err := installedSize(stage)
 	if err != nil {
 		return "", err
@@ -90,7 +95,7 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 	if err := os.MkdirAll(filepath.Join(stage, "DEBIAN"), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "control"), []byte(Control(r, version, size)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stage, "DEBIAN", "control"), []byte(control(r, version, size, depends)), 0o644); err != nil {
 		return "", err
 	}
 	for name, body := range r.Scripts {
@@ -119,13 +124,38 @@ func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 
 // Control is the package's control file; size is in KiB.
 func Control(r *catalog.Recipe, version string, size int64) string {
+	return control(r, version, size, nil)
+}
+
+// Conflicts is what r's package conflicts with: the other half of a pair,
+// and replaced Debian packages of another name (ADR 0016).
+func Conflicts(r *catalog.Recipe) []string {
+	c := append([]string{}, r.Conflicts...)
+	for _, p := range r.Replaces {
+		if p != r.Package() {
+			c = append(c, p)
+		}
+	}
+	return c
+}
+
+// ReplacedField records the replaced packages that were installed.
+func ReplacedField(r *catalog.Recipe) string {
+	if len(r.Replaced) == 0 {
+		return ""
+	}
+	return "X-Dovy-Replaced: " + strings.Join(r.Replaced, ", ") + "\n"
+}
+
+func control(r *catalog.Recipe, version string, size int64, depends []string) string {
 	var rel string
-	if len(r.Packages) > 0 {
-		rel += "Depends: " + strings.Join(r.Packages, ", ") + "\n"
+	if d := append(append([]string{}, r.Packages...), depends...); len(d) > 0 {
+		rel += "Depends: " + strings.Join(d, ", ") + "\n"
 	}
-	if len(r.Conflicts) > 0 {
-		rel += "Conflicts: " + strings.Join(r.Conflicts, ", ") + "\n"
+	if c := Conflicts(r); len(c) > 0 {
+		rel += "Conflicts: " + strings.Join(c, ", ") + "\n"
 	}
+	rel += ReplacedField(r)
 	field := "X-Dovy-Recipe"
 	if r.Kind == capability.Kind {
 		rel += "X-Dovy-Content: " + ContentHash(r) + "\n"

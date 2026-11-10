@@ -16,6 +16,7 @@ import (
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/fetch"
 	"github.com/getdovy/dovy/internal/log"
+	"github.com/getdovy/dovy/internal/overlap"
 	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/state"
 	"github.com/getdovy/dovy/internal/ui"
@@ -53,6 +54,7 @@ type txn struct {
 	notes    []*catalog.Recipe                    // per-user steps after install
 	prebuilt map[string]string                    // recipe → .deb already built (vendor .debs, repacks)
 	leftover string                               // notice after remove (4.7)
+	restored map[string]string                    // replaced packages coming back → mark (ADR 0016)
 
 	tmp      string
 	actions  []apt.Action
@@ -200,8 +202,11 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 				size, download, disk = ui.Bytes(n), download+n, disk+n
 			}
 			note := ""
-			if t.caps[x.Name] {
+			switch {
+			case t.caps[x.Name]:
 				note = "capability"
+			case x.Old != "" && t.inst[x.Name].Recipe == "":
+				note = "replaces " + x.Old
 			}
 			ins = append(ins, ui.Row{Name: x.Name, Version: x.Version, Source: "dovy", Size: size, Note: note})
 		case x.Op == "Inst":
@@ -220,10 +225,15 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 				continue
 			case x.Old != "":
 				row.Note = "upgrades " + x.Old
+			case t.restored[x.Name] != "":
+				row.Note = "restored"
 			}
 			deps = append(deps, row)
 		case x.Op == "Remv" || x.Op == "Purg":
-			i := t.inst[x.Name]
+			i, ok := t.inst[x.Name]
+			if !ok { // multiarch libraries: dpkg names them with their arch
+				i = t.inst[x.Name+":amd64"]
+			}
 			disk -= i.Size
 			src := "Debian"
 			switch {
@@ -285,9 +295,10 @@ func (a *app) run(t *txn) int {
 	what := strings.Join(t.names, " ")
 	again := "dovy " + t.verb + " " + what
 
-	// Resolve packages: apt simulates with control-only stubs. A vendor
-	// .deb's dependencies are its own: it is fetched and repacked now, into
-	// the user's cache, and planned as itself.
+	// Resolve packages: apt simulates with control-only stubs; a source
+	// build's stub depends on the recipe's packages. A vendor .deb's
+	// dependencies are its own: it is fetched and repacked now, into the
+	// user's cache, and planned as itself.
 	var stubs []string
 	for _, r := range t.build {
 		if d := t.prebuilt[r.Name]; d != "" {
@@ -456,14 +467,28 @@ func (a *app) run(t *txn) int {
 		a.out.Rule("", "Build: "+r.Name)
 		d := t.prebuilt[r.Name]
 		if d == "" {
+			if build.Sourced(r) {
+				a.out.Say(ui.Green, "Building:", "in the sandbox; output in "+build.LogPath(cache, r.Name))
+			}
 			if d, err = build.Recipe(r, t.release, cache); err != nil {
 				return fail(err.Error(), "unchanged", "report it to the recipe's maintainer: "+r.Maintainer)
+			}
+			if missing := t.unplanned(d); len(missing) > 0 {
+				return fail(r.Name+" needs "+strings.Join(missing, ", ")+", not in the plan", "unchanged; the build is kept in "+filepath.Join(cache, "debs"),
+					"report it to the recipe's maintainer ("+r.Maintainer+"): add them to packages")
 			}
 		}
 		fmt.Fprintln(logf, "Built: "+d)
 		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)", r.Package(), t.versions[r.Package()]))
 		debs = append(debs, d)
 		a.out.Blank()
+	}
+	if conflicts, err := t.overlaps(debs); err != nil {
+		return fail(err.Error(), "unchanged", again)
+	} else if len(conflicts) > 0 {
+		fmt.Fprintln(logf, "Refused: "+strings.Join(conflicts, "; "))
+		a.errs.Refuse(what, "files belong to packages that stay; the recipe must list them in replaces", strings.Join(conflicts, "; "))
+		return exitRefused
 	}
 	if len(debs) > 0 {
 		if err := repo.Publish(repo.Dir, debs, a.root); err != nil {
@@ -585,9 +610,21 @@ func (a *app) run(t *txn) int {
 			auto = append(auto, n)
 		}
 	}
-	if len(auto) > 0 {
-		if err := a.root(append([]string{"apt-mark", "auto"}, auto...)...); err != nil {
-			a.out.Say(ui.Yellow, "Warning:", "could not mark "+strings.Join(auto, ", ")+" automatic")
+	marks := map[string][]string{}
+	for _, n := range auto {
+		if t.restored[n] == "" {
+			marks["auto"] = append(marks["auto"], n)
+		}
+	}
+	for _, n := range sortedKeys(t.restored) { // as before the recipe (ADR 0016)
+		marks[t.restored[n]] = append(marks[t.restored[n]], n)
+	}
+	for _, m := range []string{"auto", "manual"} {
+		if len(marks[m]) == 0 {
+			continue
+		}
+		if err := a.root(append([]string{"apt-mark", m}, marks[m]...)...); err != nil {
+			a.out.Say(ui.Yellow, "Warning:", "could not mark "+strings.Join(marks[m], ", ")+" "+m)
 		}
 	}
 
@@ -599,6 +636,11 @@ func (a *app) run(t *txn) int {
 	}
 	for p := range t.unused {
 		all[p] = true
+	}
+	for p := range t.down { // dovy's package returned to Debian's version
+		if t.inst[p].Recipe != "" {
+			gone = append(gone, p)
+		}
 	}
 	for p := range all {
 		if i := t.inst[p]; (i.Recipe != "" || i.Capability != "") && configOnly(p) {
@@ -641,6 +683,88 @@ func (a *app) run(t *txn) int {
 	return exitOK
 }
 
+// overlaps checks the files of every package from outside Debian against
+// installed packages that stay (ADR 0016): dovy's builds, and vendor
+// packages apt just downloaded.
+func (t *txn) overlaps(built []string) ([]string, error) {
+	paths := append([]string{}, built...)
+	leaving := map[string]bool{}
+	for _, x := range t.actions {
+		switch {
+		case x.Op == "Remv" || x.Op == "Purg":
+			leaving[strings.SplitN(x.Name, ":", 2)[0]] = true
+		case x.Op == "Inst" && t.versions[x.Name] == "" && x.Origin != "Backports" && !strings.HasPrefix(x.Origin, "Debian"):
+			paths = append(paths, archived(x)...)
+		}
+	}
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	owners, err := overlap.Owners("/var/lib/dpkg/info")
+	if err != nil {
+		return nil, err
+	}
+	var debs []*overlap.Deb
+	for _, p := range paths {
+		d, err := overlap.Read(p)
+		if err != nil {
+			return nil, err
+		}
+		debs = append(debs, d)
+	}
+	var out []string
+	for _, c := range overlap.Check(debs, owners, leaving, overlap.Diverted()) {
+		out = append(out, c.String())
+	}
+	return out, nil
+}
+
+// unplanned lists what a built package depends on that is neither installed
+// nor in the plan: the recipe's packages missed it, so apt's plan would
+// change after confirmation.
+func (t *txn) unplanned(deb string) []string {
+	out, err := exec.Command("dpkg-deb", "-f", deb, "Depends", "Pre-Depends").Output()
+	if err != nil {
+		return []string{"(unreadable Depends: " + err.Error() + ")"}
+	}
+	have := map[string]bool{}
+	for p := range t.inst {
+		have[strings.SplitN(p, ":", 2)[0]] = true
+	}
+	for _, x := range t.actions {
+		if x.Op == "Inst" {
+			have[strings.SplitN(x.Name, ":", 2)[0]] = true
+		}
+	}
+	var missing []string
+	for _, l := range strings.Split(string(out), "\n") {
+		_, v, _ := strings.Cut(l, ":")
+		for _, rel := range strings.Split(v, ",") {
+			ok := false
+			for _, alt := range strings.Split(rel, "|") {
+				if f := strings.Fields(alt); len(f) > 0 && have[strings.SplitN(f[0], ":", 2)[0]] {
+					ok = true
+				}
+			}
+			if f := strings.Fields(rel); !ok && len(f) > 0 {
+				missing = append(missing, f[0])
+			}
+		}
+	}
+	return missing
+}
+
+// archived is the .deb apt downloaded for x.
+func archived(x apt.Action) []string {
+	name, arch, _ := strings.Cut(x.Name, ":")
+	if arch == "" {
+		arch = "*"
+	}
+	v := strings.ReplaceAll(x.Version, ":", "%3a")
+	m, _ := filepath.Glob(filepath.Join("/var/cache/apt/archives", name+"_"+v+"_"+arch+".deb"))
+	return m
+}
+
 // preconfigure asks packages' questions before the install, on the terminal
 // (8.11): dpkg-preconfigure on the exact .debs. The install then runs
 // non-interactively with the answers.
@@ -650,13 +774,7 @@ func (a *app) preconfigure(t *txn, built []string, logf *os.File) int {
 		if x.Op != "Inst" || t.versions[x.Name] != "" {
 			continue
 		}
-		name, arch, _ := strings.Cut(x.Name, ":")
-		if arch == "" {
-			arch = "*"
-		}
-		v := strings.ReplaceAll(x.Version, ":", "%3a")
-		m, _ := filepath.Glob(filepath.Join("/var/cache/apt/archives", name+"_"+v+"_"+arch+".deb"))
-		debs = append(debs, m...)
+		debs = append(debs, archived(x)...)
 	}
 	if len(debs) == 0 {
 		return exitOK

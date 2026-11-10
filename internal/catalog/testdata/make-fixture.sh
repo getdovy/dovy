@@ -115,6 +115,7 @@ bundle bad $T3 $T4
 # postfix makes apt remove an installed exim4.
 g checkout -q --orphan install
 g rm -q -r -f .
+buildsh() { cat >"$tmp/repo/recipes/$1/build.sh"; }
 recipe pfetch <<'EOF'
 name = "pfetch"
 description = "Pretty system information tool, Rust rewrite of pfetch"
@@ -129,6 +130,59 @@ sha256 = "1816aa30f763856403b1a4d91f73ffd79e96d3a0a5cef6f305f025253f6a3a6c"
 
 [install]
 "/usr/bin/pfetch" = "pfetch"
+EOF
+# Source builds (milestone 7): yad upstream, btop from testing.
+recipe yad <<'EOF'
+name = "yad"
+description = "Dialogs for shell scripts"
+kind = "upstream-build"
+version = "14.2"
+maintainer = "test"
+debian = [13]
+replaces = ["yad"]
+build-depends = ["autoconf", "automake", "autopoint", "gettext", "pkgconf", "libgtk-3-dev"]
+packages = ["libgtk-3-0t64"]
+
+[[source]]
+url = "https://github.com/v1cont/yad/archive/refs/tags/v14.2.tar.gz"
+sha256 = "6748c0ecb917043326cc70646f143890151dea2fc50db5fe54439de6dc04b1e3"
+EOF
+buildsh yad <<'EOF'
+cd yad-14.2
+autoreconf -ivf
+./configure --prefix=/usr --disable-schemas-compile
+make
+make install
+EOF
+recipe btop <<'EOF'
+name = "btop"
+description = "Resource monitor"
+kind = "testing-rebuild"
+version = "1.4.7"
+maintainer = "test"
+debian = [13]
+replaces = ["btop"]
+source-package = "btop"
+
+[[source]]
+url = "https://deb.debian.org/debian/pool/main/b/btop/btop_1.4.7-1.dsc"
+sha256 = "652ba17beb2e92f83d66dd49b00fbc1adc66f08b2bea07c0b93a5c890d913cb0"
+EOF
+# offline: a build that reaches for the network without saying why.
+recipe offline <<'EOF'
+name = "offline"
+description = "Fails: its build needs the network"
+kind = "upstream-build"
+version = "14.2"
+maintainer = "test"
+debian = [13]
+
+[[source]]
+url = "https://github.com/v1cont/yad/archive/refs/tags/v14.2.tar.gz"
+sha256 = "6748c0ecb917043326cc70646f143890151dea2fc50db5fe54439de6dc04b1e3"
+EOF
+buildsh offline <<'EOF'
+getent hosts deb.debian.org
 EOF
 recipe zram <<'EOF'
 name = "zram"
@@ -476,6 +530,9 @@ config = ""
 templates = ""
 EOF
 vendor firefox mozilla firefox
+echo 'replaces = ["firefox-esr"]' >>"$tmp/repo/recipes/firefox/recipe.toml"
+# clash: Mozilla's firefox without replaces, refused where firefox-esr is.
+vendor clash mozilla firefox
 vendor google-chrome google-chrome google-chrome-stable
 vendor brave-browser brave brave-browser
 vendor brave-origin brave brave-origin

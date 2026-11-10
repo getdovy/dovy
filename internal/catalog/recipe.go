@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -87,8 +88,11 @@ type Recipe struct {
 	Backports     bool              `toml:"backports"`
 	Files         []File            `toml:"file"`
 	Members       []string          `toml:"members"`
+	BuildDepends  []string          `toml:"build-depends"`
 
-	HasBuild bool `toml:"-"` // build.sh present
+	HasBuild bool     `toml:"-"` // build.sh present
+	Dir      string   `toml:"-"` // the recipe's folder
+	Replaced []string `toml:"-"` // set at install: "pkg manual|auto" (ADR 0016)
 }
 
 // Package is the name of the .deb dovy builds for r: software keeps its
@@ -204,7 +208,8 @@ func parse(path string) (*Recipe, error) {
 		}
 		return nil, fmt.Errorf("unknown fields: %s", strings.Join(keys, ", "))
 	}
-	_, err = os.Stat(filepath.Join(filepath.Dir(path), "build.sh"))
+	r.Dir = filepath.Dir(path)
+	_, err = os.Stat(filepath.Join(r.Dir, "build.sh"))
 	r.HasBuild = err == nil
 	return r, nil
 }
@@ -280,7 +285,7 @@ func check(r *Recipe) []string {
 			add("file %s: only drop-ins under /etc/**/*.d/", f.Path)
 		}
 	}
-	pkgs := append([]string{}, r.Packages...)
+	pkgs := append(append(append([]string{}, r.Packages...), r.BuildDepends...), r.Replaces...)
 	for _, n := range pkgs {
 		if !pkgRe.MatchString(n) {
 			add("package %q: an exact package name", n)
@@ -299,12 +304,13 @@ func check(r *Recipe) []string {
 		"file":           len(r.Files) > 0,
 		"members":        len(r.Members) > 0,
 		"build.sh":       r.HasBuild,
+		"build-depends":  len(r.BuildDepends) > 0,
 	}
 	allowed := map[string][]string{
-		UpstreamBuild:    {"source", "build.sh"},
+		UpstreamBuild:    {"source", "build.sh", "build-depends", "packages"},
 		UpstreamBinary:   {"source", "install", "scripts"},
 		VendorRepository: {"repository", "packages", "scripts"},
-		TestingRebuild:   {"source-package", "build.sh"},
+		TestingRebuild:   {"source-package", "source", "build.sh", "packages"},
 		Setup:            {"packages", "backports", "file"},
 		Bundle:           {"members"},
 	}
@@ -323,6 +329,11 @@ func check(r *Recipe) []string {
 		if !has["source"] || !has["build.sh"] {
 			add("upstream-build needs [[source]] and build.sh")
 		}
+		for _, s := range r.Sources {
+			if !strings.HasSuffix(s.URL, ".tar.gz") {
+				add("source %s: .tar.gz only", s.URL)
+			}
+		}
 	case UpstreamBinary:
 		if !has["source"] {
 			add("upstream-binary needs [[source]]")
@@ -334,6 +345,11 @@ func check(r *Recipe) []string {
 	case TestingRebuild:
 		if !has["source-package"] {
 			add("testing-rebuild needs source-package")
+		}
+		if len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".dsc") {
+			add("testing-rebuild needs one [[source]]: the .dsc")
+		} else if b := path.Base(r.Sources[0].URL); !strings.HasPrefix(b, r.SourcePackage+"_"+r.Version+"-") {
+			add("source %s: expected %s_%s-<debian revision>.dsc", b, r.SourcePackage, r.Version)
 		}
 	case Setup:
 		if !has["packages"] && !has["file"] {

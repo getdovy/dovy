@@ -14,6 +14,7 @@ import (
 	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
+	"github.com/getdovy/dovy/internal/sandbox"
 	"github.com/getdovy/dovy/internal/state"
 	"github.com/getdovy/dovy/internal/ui"
 )
@@ -92,6 +93,12 @@ func (a *app) install(names []string) int {
 			a.errs.Refuse(r.Name, "kind "+r.Kind+" is not built yet", "")
 			return exitRefused
 		}
+		if build.Sourced(r) {
+			if err := sandbox.Check(); err != nil {
+				a.errs.Refuse(r.Name, err.Error(), "")
+				return exitRefused
+			}
+		}
 		if !supports(r, release) {
 			a.errs.Refuse(r.Name, fmt.Sprintf("supports Debian %v", r.Debian), fmt.Sprintf("Debian %d", release))
 			return exitRefused
@@ -101,7 +108,16 @@ func (a *app) install(names []string) int {
 			continue
 		}
 		t.names = append(t.names, r.Name)
-		t.build = append(t.build, capability.Expand(r, rs, codename))
+		if build.Sourced(r) {
+			why := "network off"
+			if r.Network != "" {
+				why = "network: " + r.Network
+			}
+			t.system = append(t.system, ui.Pair{Item: "built from source in the sandbox", Reason: r.Name + " (" + why + ")"})
+		}
+		x := capability.Expand(r, rs, codename)
+		t.replace(x, byRecipe, inst)
+		t.build = append(t.build, x)
 		t.versions[r.Package()] = v
 		if r.UserNotes != "" {
 			t.notes = append(t.notes, r)
@@ -211,6 +227,48 @@ func (a *app) install(names []string) int {
 		}
 	}
 	return a.run(t)
+}
+
+// replace records the Debian packages r replaces that are installed, with
+// their mark, and removes those of another name (ADR 0016). A recipe
+// already installed keeps its record.
+func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[string]pkgInfo) {
+	if p, ok := byRecipe[r.Name]; ok {
+		r.Replaced = splitList(inst[p].Replaced)
+		return
+	}
+	manual := map[string]bool{}
+	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
+		for _, n := range strings.Fields(string(out)) {
+			manual[n] = true
+		}
+	}
+	for _, p := range r.Replaces {
+		i, ok := inst[p]
+		if !ok || i.Recipe != "" {
+			continue
+		}
+		mark := "auto"
+		if manual[p] {
+			mark = "manual"
+		}
+		r.Replaced = append(r.Replaced, p+" "+mark)
+		if p != r.Package() {
+			t.removing[p] = "replaced by " + r.Name
+			t.request = append(t.request, p+"-")
+		}
+	}
+}
+
+// splitList reads a comma-separated control field.
+func splitList(v string) []string {
+	var s []string
+	for _, x := range strings.Split(v, ",") {
+		if x = strings.TrimSpace(x); x != "" {
+			s = append(s, x)
+		}
+	}
+	return s
 }
 
 // leaveBackports undoes a backports recipe (4.6): its packages, and the
