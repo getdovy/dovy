@@ -120,6 +120,9 @@ func (a *app) rows() ([]row, int) {
 	var out []row
 	for n, r := range rs {
 		x := row{name: n, version: r.Version, status: "available", note: note(r), description: r.Description}
+		if why := unavailable(r, rs); why != "" {
+			x.status, x.note = "not available", why
+		}
 		if v, ok := inst[n]; ok {
 			x.version, x.status = v, "installed"
 			if upstream(v) != r.Version {
@@ -273,7 +276,11 @@ func (a *app) show(args []string) int {
 		a.out.KV("Depends", strings.Join(r.Depends, ", "))
 	}
 	a.out.KV("Replaces", or(strings.Join(r.Replaces, ", "), "nothing"))
-	a.out.KV("Hardware", or(r.Hardware, "any"))
+	hw := or(r.Hardware, "any")
+	if why := unavailable(r, rs); why != "" {
+		hw += "; not available: " + why
+	}
+	a.out.KV("Hardware", hw)
 	a.out.KV("Debian", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(r.Debian)), ", "), "[]"))
 	a.out.KV("Maintainer", r.Maintainer)
 	if r.UserNotes != "" {

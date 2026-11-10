@@ -369,14 +369,21 @@ func UsedBy(srcs []Source, host string) *Source {
 	return nil
 }
 
-// RepoSource is the apt source of a vendor repository, with its keyring.
-func RepoSource(q *catalog.Repository, keyring string) string {
+// RepoSource is the apt source of a vendor repository, with its keyring;
+// i386 too when pkgs has :i386 packages.
+func RepoSource(q *catalog.Repository, keyring string, pkgs []string) string {
 	comps := ""
 	if !q.Flat() {
 		comps = "Components: " + strings.Join(q.Components, " ") + "\n"
 	}
-	return fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\n%sArchitectures: amd64\nSigned-By: %s\n",
-		q.URI, q.Suite, comps, keyring)
+	arch := "amd64"
+	for _, p := range pkgs {
+		if strings.HasSuffix(p, ":i386") {
+			arch = "amd64 i386"
+		}
+	}
+	return fmt.Sprintf("Types: deb\nURIs: %s\nSuites: %s\n%sArchitectures: %s\nSigned-By: %s\n",
+		q.URI, q.Suite, comps, arch, keyring)
 }
 
 // RepoPin lets the vendor supply only the packages of the recipes using
@@ -394,13 +401,16 @@ func Keyring(repo string) string { return "/usr/share/keyrings/dovy-" + repo + "
 // fingerprint), source, pin for pkgs (the packages of the recipes using
 // it), and its files for the vendor's scripts (2.4, 2.6, 5.10, ADR 0013).
 func RepoRecipe(q *catalog.Repository, key []byte, pkgs []string) *catalog.Recipe {
+	files := []catalog.File{
+		{Path: Keyring(q.Name), Content: string(key)},
+		{Path: "/etc/apt/sources.list.d/dovy-" + q.Name + ".sources", Content: RepoSource(q, Keyring(q.Name), pkgs)},
+	}
+	if q.Pinned() {
+		files = append(files, catalog.File{Path: "/etc/apt/preferences.d/dovy-" + q.Name + ".pref", Content: RepoPin(q, pkgs)})
+	}
 	return &catalog.Recipe{
 		Name: "repo-" + q.Name, Kind: Kind, Version: "1", Maintainer: "dovy",
 		Description: Host(q.URI) + " repository, for dovy recipes",
-		Files: append([]catalog.File{
-			{Path: Keyring(q.Name), Content: string(key)},
-			{Path: "/etc/apt/sources.list.d/dovy-" + q.Name + ".sources", Content: RepoSource(q, Keyring(q.Name))},
-			{Path: "/etc/apt/preferences.d/dovy-" + q.Name + ".pref", Content: RepoPin(q, pkgs)},
-		}, q.Files...),
+		Files:       append(files, q.Files...),
 	}
 }
