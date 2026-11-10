@@ -111,6 +111,14 @@ func (a *app) remove(names []string) int {
 			a.errs.Fail(n+" is not installed", "unchanged", "dovy list --installed", "")
 			return exitFailed
 		}
+		if r := rs[n]; r != nil && r.Repo != nil && !r.Repo.Pinned() {
+			// NVIDIA: nothing comes back; nouveau takes over (4.5, ADR 0017).
+			t.removing[p] = "purged"
+			t.request = append(t.request, p+"-")
+			t.leftover = "Without NVIDIA's driver the machine uses nouveau after a reboot. Debian's driver, if wanted: sudo apt install nvidia-driver"
+			t.system = append(t.system, ui.Pair{Item: "graphics driver", Reason: "nouveau after a reboot; Debian's driver is not restored"})
+			continue
+		}
 		t.restore(p, inst[p])
 	}
 	// A recipe still needed by another installed recipe stays (4.8).

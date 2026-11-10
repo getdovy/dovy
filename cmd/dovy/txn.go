@@ -55,6 +55,8 @@ type txn struct {
 	prebuilt map[string]string                    // recipe → .deb already built (vendor .debs, repacks)
 	leftover string                               // notice after remove (4.7)
 	restored map[string]string                    // replaced packages coming back → mark (ADR 0016)
+	unpinned []string                             // hosts of unpinned repositories (ADR 0017)
+	sbNotes  []ui.Pair                            // Secure Boot notes (1.4)
 
 	tmp      string
 	actions  []apt.Action
@@ -337,6 +339,15 @@ func (a *app) run(t *txn) int {
 		a.errs.Refuse(what, "apt cannot do it", err.Error())
 		return exitRefused
 	}
+	if why, err := t.turing(); err != nil {
+		a.errs.Fail(err.Error(), "unchanged", "check the network, then: "+again, "")
+		return exitFailed
+	} else if why != "" {
+		reason, found, _ := strings.Cut(why, "|")
+		a.errs.Refuse(what, reason, found)
+		return exitRefused
+	}
+	t.platform()
 	surprises, kernel := t.check()
 	if kernel != "" {
 		a.errs.Refuse(what, "removes the running kernel ("+kernel+")", "reboot into another kernel, then: "+again)
@@ -386,6 +397,9 @@ func (a *app) run(t *txn) int {
 	}
 	if len(t.kept) > 0 {
 		a.out.Pairs(ui.Cyan, "Kept", t.kept)
+	}
+	if len(t.sbNotes) > 0 {
+		a.out.Pairs(ui.Yellow, "Notes", t.sbNotes)
 	}
 	a.out.Summary(counts, totals)
 	a.out.Blank()
@@ -667,6 +681,10 @@ func (a *app) run(t *txn) int {
 		for _, w := range t.warnings {
 			a.out.Say(ui.Yellow, "Warning:", w)
 		}
+		a.out.Blank()
+	}
+	if len(t.sbNotes) > 0 {
+		a.out.Pairs(ui.Yellow, "Notices", t.sbNotes)
 		a.out.Blank()
 	}
 	a.notices(t.notes, versions)

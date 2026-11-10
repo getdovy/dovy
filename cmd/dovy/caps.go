@@ -167,13 +167,20 @@ func (t *txn) repository(q *catalog.Repository, pkgs []string, key []byte, users
 	if sim != nil {
 		name := "dovy-" + q.Name
 		sim.keys[name+".pgp"] = string(k.Binary)
-		sim.sources[name+".sources"] = capability.RepoSource(q, "@KEYS@/"+name+".pgp")
-		sim.prefs[name+".pref"] = capability.RepoPin(q, pkgs)
+		sim.sources[name+".sources"] = capability.RepoSource(q, "@KEYS@/"+name+".pgp", pkgs)
+		if q.Pinned() {
+			sim.prefs[name+".pref"] = capability.RepoPin(q, pkgs)
+		}
 	}
 	if updated {
 		users = "updated: " + strings.Join(pkgs, ", ")
 	}
-	t.system = append(t.system, ui.Pair{Item: host + " repository", Reason: users})
+	item := host + " repository"
+	if !q.Pinned() {
+		item += ", not pinned"
+		t.unpinned = append(t.unpinned, host)
+	}
+	t.system = append(t.system, ui.Pair{Item: item, Reason: users})
 	return refusal, nil
 }
 
@@ -290,7 +297,7 @@ func (t *txn) repacked(r *catalog.Recipe, cache string) (path, version string, r
 	if err := os.WriteFile(keyring, k.Binary, 0o644); err != nil {
 		return "", "", refusal, err
 	}
-	if err := os.WriteFile(filepath.Join(parts, q.Name+".sources"), []byte(capability.RepoSource(q, keyring)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(parts, q.Name+".sources"), []byte(capability.RepoSource(q, keyring, nil)), 0o644); err != nil {
 		return "", "", refusal, err
 	}
 	opts := []string{"-q", "-o", "Dir::Etc::SourceList=/dev/null", "-o", "Dir::Etc::SourceParts=" + parts,

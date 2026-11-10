@@ -49,8 +49,12 @@ type Repository struct {
 	Fingerprints []string `toml:"fingerprints"`
 	Maintainer   string   `toml:"maintainer"`
 	Repack       bool     `toml:"repack"` // never given to apt; packages repacked (ADR 0014)
+	Pin          *bool    `toml:"pin"`    // false: not pinned (NVIDIA, ADR 0017)
 	Files        []File   `toml:"file"`
 }
+
+// Pinned reports whether the repository is pinned to its recipes' packages.
+func (q *Repository) Pinned() bool { return q.Pin == nil || *q.Pin }
 
 // Flat reports a flat repository: the suite is a path, with no components.
 func (q *Repository) Flat() bool { return strings.HasSuffix(q.Suite, "/") }
@@ -74,6 +78,7 @@ type Recipe struct {
 	Conflicts   []string `toml:"conflicts"`
 	Replaces    []string `toml:"replaces"`
 	Hardware    string   `toml:"hardware"`
+	SecureBoot  string   `toml:"secure-boot"`
 	Network     string   `toml:"network"`
 	Successor   string   `toml:"successor"`
 	UserNotes   string   `toml:"user-notes"`
@@ -249,6 +254,9 @@ func check(r *Recipe) []string {
 	}
 	if r.Hardware != "" && !hardware[r.Hardware] {
 		add("hardware: unknown check %q", r.Hardware)
+	}
+	if r.SecureBoot != "" && r.SecureBoot != "dkms" && r.SecureBoot != "unsigned-kernel" {
+		add("secure-boot: dkms or unsigned-kernel")
 	}
 	for _, s := range r.Sources {
 		if !strings.HasPrefix(s.URL, "https://") {
@@ -505,6 +513,12 @@ func loadRepositories(dir string) (map[string]*Repository, []error) {
 		}
 		if len(q.Fingerprints) == 0 {
 			add("fingerprints required")
+		}
+		if q.Pin != nil && *q.Pin {
+			add("pin: only false; repositories are pinned by default")
+		}
+		if !q.Pinned() && q.Repack {
+			add("pin = false and repack: one or the other")
 		}
 		for _, f := range q.Fingerprints {
 			if !fprRe.MatchString(f) {

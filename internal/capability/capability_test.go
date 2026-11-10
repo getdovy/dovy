@@ -170,7 +170,7 @@ func TestRepo(t *testing.T) {
 
 func TestFlatSource(t *testing.T) {
 	q := &catalog.Repository{URI: "https://ppa.floorp.app/amd64", Suite: "./"}
-	if got := RepoSource(q, "/k"); got != "Types: deb\nURIs: https://ppa.floorp.app/amd64\nSuites: ./\nArchitectures: amd64\nSigned-By: /k\n" {
+	if got := RepoSource(q, "/k", nil); got != "Types: deb\nURIs: https://ppa.floorp.app/amd64\nSuites: ./\nArchitectures: amd64\nSigned-By: /k\n" {
 		t.Errorf("got %q", got)
 	}
 }

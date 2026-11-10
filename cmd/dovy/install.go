@@ -85,6 +85,18 @@ func (a *app) install(names []string) int {
 			byRecipe[i.Recipe] = p
 		}
 	}
+	// Hardware first, without the network; dependents inherit (6.7).
+	var refused []string
+	why := ""
+	for _, r := range order {
+		if w := unavailable(r, rs); w != "" {
+			refused, why = append(refused, r.Name), w
+		}
+	}
+	if len(refused) > 0 {
+		a.errs.Refuse(strings.Join(refused, ", "), why, "")
+		return exitRefused
+	}
 	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
 	needs := map[string][]string{} // capability → recipes
@@ -135,6 +147,7 @@ func (a *app) install(names []string) int {
 		fmt.Fprintln(a.out.Out, "Nothing to do: "+strings.Join(names, ", ")+" already installed.")
 		return exitOK
 	}
+	t.sbNotes = secureBoot(t.build)
 	tmp, err := os.MkdirTemp("", "dovy-")
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
