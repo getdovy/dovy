@@ -43,9 +43,11 @@ func TestParseMadison(t *testing.T) {
  mesa-libgallium | 25.0.7-2+deb13u1 | http://deb.debian.org/debian trixie/main amd64 Packages
  mesa-libgallium | 25.0.7-2 | http://deb.debian.org/debian trixie/main amd64 Packages
    linux-image-amd64 | 6.12.107-1 | http://deb.debian.org/debian-security trixie-security/main amd64 Packages
+       yad | 14.2-1~dovy13 | file:/var/lib/dovy/repo ./ Packages
+       yad | 0.40.0-1.1 | http://deb.debian.org/debian trixie/main amd64 Packages
 `
 	got := parseMadison(out)
-	if got["mesa-libgallium"] != "25.0.7-2+deb13u1" || got["linux-image-amd64"] != "6.12.107-1" {
+	if got["mesa-libgallium"] != "25.0.7-2+deb13u1" || got["linux-image-amd64"] != "6.12.107-1" || got["yad"] != "0.40.0-1.1" {
 		t.Errorf("got %v", got)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/fetch"
+	"github.com/getdovy/dovy/internal/sandbox"
 	"github.com/getdovy/dovy/internal/unpack"
 )
 
@@ -28,7 +29,8 @@ func CacheDir() (string, error) {
 // Buildable reports whether this dovy builds r's kind.
 func Buildable(r *catalog.Recipe) bool {
 	switch r.Kind {
-	case catalog.UpstreamBinary, catalog.Setup, catalog.VendorRepository, capability.Kind:
+	case catalog.UpstreamBinary, catalog.Setup, catalog.VendorRepository, capability.Kind,
+		catalog.UpstreamBuild, catalog.TestingRebuild:
 		return true
 	}
 	return false
@@ -41,12 +43,20 @@ func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
 		return "", fmt.Errorf("%s: kind %s is not built yet", r.Name, r.Kind)
 	}
 	work := filepath.Join(cache, "build", r.Name)
-	if err := os.RemoveAll(work); err != nil {
+	if err := sandbox.Remove(work); err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(work)
-	if IsDeb(r) {
+	defer sandbox.Remove(work)
+	switch {
+	case IsDeb(r):
 		return vendor(r, release, cache, work)
+	case r.Kind == catalog.UpstreamBuild:
+		return upstream(r, release, cache, work)
+	case r.Kind == catalog.TestingRebuild:
+		if err := os.MkdirAll(work, 0o755); err != nil {
+			return "", err
+		}
+		return rebuild(r, release, cache, work)
 	}
 	src, stage := filepath.Join(work, "src"), filepath.Join(work, "stage")
 	if err := os.MkdirAll(stage, 0o755); err != nil {
@@ -115,6 +125,7 @@ func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", r.Name, err)
 	}
+	fields = merge(fields, "Conflicts", deb.Conflicts(r)) + deb.ReplacedField(r)
 	if err := os.WriteFile(ctl, []byte(fields), 0o644); err != nil {
 		return "", err
 	}
@@ -162,6 +173,26 @@ func Restamp(control, pkg, version, recipe string) (string, error) {
 	}
 	b.WriteString("X-Dovy-Recipe: " + recipe + "\n")
 	return b.String(), nil
+}
+
+// merge adds names to a control file's relation field.
+func merge(control, name string, names []string) string {
+	if len(names) == 0 {
+		return control
+	}
+	var b strings.Builder
+	done := false
+	for _, l := range strings.Split(strings.TrimRight(control, "\n"), "\n") {
+		if v, ok := strings.CutPrefix(l, name+":"); ok {
+			l = name + ": " + strings.Join(append([]string{strings.TrimSpace(v)}, names...), ", ")
+			done = true
+		}
+		b.WriteString(l + "\n")
+	}
+	if !done {
+		b.WriteString(name + ": " + strings.Join(names, ", ") + "\n")
+	}
+	return b.String()
 }
 
 func field(control, name string) string {

@@ -184,3 +184,35 @@ func TestVendorRepository(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceKinds(t *testing.T) {
+	head := "name = \"btop\"\ndescription = \"Resource monitor\"\nversion = \"1.4.7\"\nmaintainer = \"t\"\ndebian = [13]\nreplaces = [\"btop\"]\n"
+	rebuild := head + "kind = \"testing-rebuild\"\nsource-package = \"btop\"\n\n[[source]]\nurl = \"https://deb.debian.org/debian/pool/main/b/btop/btop_1.4.7-1.dsc\"\nsha256 = \"" + sha + "\"\n"
+	if _, err := Load(catalogDir(t, map[string]string{"btop": rebuild}), noDebian); err != nil {
+		t.Fatal(err)
+	}
+	build := head + "kind = \"upstream-build\"\nbuild-depends = [\"cargo\"]\n\n[[source]]\nurl = \"https://example.org/btop.tar.gz\"\nsha256 = \"" + sha + "\"\n"
+	dir := catalogDir(t, map[string]string{"btop": build})
+	os.WriteFile(filepath.Join(dir, "recipes", "btop", "build.sh"), []byte("make\n"), 0o644)
+	rs, err := Load(dir, noDebian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rs["btop"]; !r.HasBuild || r.Dir != filepath.Join(dir, "recipes", "btop") {
+		t.Errorf("got %+v", r)
+	}
+	for name, c := range map[string]struct{ body, want string }{
+		"dsc version":    {strings.Replace(rebuild, "1.4.7-1.dsc", "1.4.6-1.dsc", 1), "expected btop_1.4.7-<debian revision>.dsc"},
+		"no dsc":         {strings.Replace(rebuild, ".dsc", ".tar.gz", 1), "one [[source]]: the .dsc"},
+		"deps elsewhere": {strings.Replace(rebuild, "kind =", "build-depends = [\"cargo\"]\nkind =", 1), "build-depends: not used"},
+		"xz source":      {strings.Replace(build, ".tar.gz", ".tar.xz", 1), ".tar.gz only"},
+		"bad dep":        {strings.Replace(build, `"cargo"`, `"cargo (>= 1)"`, 1), "exact package name"},
+		"testing dep":    {strings.Replace(build, `"cargo"`, `"cargo/testing"`, 1), "exact package name"},
+	} {
+		dir := catalogDir(t, map[string]string{"btop": c.body})
+		os.WriteFile(filepath.Join(dir, "recipes", "btop", "build.sh"), []byte("make\n"), 0o644)
+		if _, err := Load(dir, noDebian); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+}

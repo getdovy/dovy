@@ -19,24 +19,24 @@ import (
 
 // pkgInfo is an installed package as dpkg knows it.
 type pkgInfo struct {
-	Version, Recipe, Capability, Content string
-	Size                                 int64 // bytes
+	Version, Recipe, Capability, Content, Replaced string
+	Size                                           int64 // bytes
 }
 
 // dpkgInstalled lists installed packages with dovy's field (3.3).
 func dpkgInstalled() (map[string]pkgInfo, error) {
-	out, err := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${X-Dovy-Content}\t${db:Status-Abbrev}\n").Output()
+	out, err := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${X-Dovy-Content}\t${X-Dovy-Replaced}\t${db:Status-Abbrev}\n").Output()
 	if err != nil {
 		return nil, fmt.Errorf("dpkg-query: %w", err)
 	}
 	m := map[string]pkgInfo{}
 	for _, l := range strings.Split(string(out), "\n") {
 		f := strings.Split(l, "\t")
-		if len(f) != 7 || !strings.HasPrefix(f[6], "ii") {
+		if len(f) != 8 || !strings.HasPrefix(f[7], "ii") {
 			continue
 		}
 		kib, _ := strconv.ParseInt(f[2], 10, 64)
-		m[f[0]] = pkgInfo{f[1], f[3], f[4], f[5], kib * 1024}
+		m[f[0]] = pkgInfo{f[1], f[3], f[4], f[5], f[6], kib * 1024}
 	}
 	return m, nil
 }
@@ -111,8 +111,7 @@ func (a *app) remove(names []string) int {
 			a.errs.Fail(n+" is not installed", "unchanged", "dovy list --installed", "")
 			return exitFailed
 		}
-		t.removing[p] = "purged"
-		t.request = append(t.request, p+"-")
+		t.restore(p, inst[p])
 	}
 	// A recipe still needed by another installed recipe stays (4.8).
 	for r, p := range byRecipe {
@@ -120,7 +119,7 @@ func (a *app) remove(names []string) int {
 			continue
 		}
 		for _, d := range rs[r].Depends {
-			if p2, ok := byRecipe[d]; ok && t.removing[p2] != "" {
+			if _, ok := byRecipe[d]; ok && contains(names, d) {
 				a.errs.Refuse(d, "needed by "+r, "")
 				return exitRefused
 			}
@@ -214,6 +213,46 @@ func (a *app) remove(names []string) int {
 		}
 	}
 	return code
+}
+
+// restore removes a recipe's package and brings back the Debian packages
+// it replaced, with their mark (ADR 0016): another name is reinstalled; the
+// same name returns to Debian's version.
+func (t *txn) restore(p string, i pkgInfo) {
+	back := map[string]string{}
+	for _, x := range splitList(i.Replaced) {
+		if f := strings.Fields(x); len(f) == 2 {
+			back[f[0]] = f[1]
+		}
+	}
+	if t.restored == nil {
+		t.restored = map[string]string{}
+	}
+	if mark, ok := back[p]; ok {
+		if v := apt.Stable(nil, []string{p})[p]; v != "" {
+			t.down[p] = true
+			t.restored[p] = mark
+			t.request = append(t.request, p+"="+v)
+		}
+		delete(back, p)
+	}
+	if !t.down[p] {
+		t.removing[p] = "purged"
+		t.request = append(t.request, p+"-")
+	}
+	for _, n := range sortedKeys(back) {
+		t.restored[n] = back[n]
+		t.request = append(t.request, n)
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	var k []string
+	for x := range m {
+		k = append(k, x)
+	}
+	sort.Strings(k)
+	return k
 }
 
 // kept lists the recipes' Debian packages that stay, and why (12.2).

@@ -82,7 +82,7 @@ func cmpNum(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// Stable returns the newest version of each package outside backports, from
+// Stable returns the newest Debian version of each package outside backports, from
 // `apt-cache madison`; missing packages are left out.
 func Stable(opts []string, pkgs []string) map[string]string {
 	if len(pkgs) == 0 {
@@ -101,7 +101,7 @@ func parseMadison(out string) map[string]string {
 			continue
 		}
 		name, ver, src := strings.TrimSpace(f[0]), strings.TrimSpace(f[1]), strings.Fields(f[2])
-		if len(src) < 2 || strings.Contains(src[1], "-backports") {
+		if len(src) < 2 || strings.Contains(src[1], "-backports") || strings.Contains(ver, "~dovy") {
 			continue
 		}
 		if cur, ok := best[name]; !ok || Compare(ver, cur) > 0 {

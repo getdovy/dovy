@@ -33,6 +33,9 @@ func TarGz(path, dest string) error {
 		if err != nil {
 			return err
 		}
+		if h.Typeflag == tar.TypeXGlobalHeader { // git archive's commit id
+			continue
+		}
 		name, err := inside(h.Name)
 		if err != nil {
 			return err

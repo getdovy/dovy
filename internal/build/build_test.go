@@ -32,7 +32,7 @@ sha256 = "1816aa30f763856403b1a4d91f73ffd79e96d3a0a5cef6f305f025253f6a3a6c"
 `
 
 func TestRefusesOtherKinds(t *testing.T) {
-	r := &catalog.Recipe{Name: "yad", Kind: catalog.TestingRebuild}
+	r := &catalog.Recipe{Name: "base", Kind: catalog.Bundle}
 	if _, err := Recipe(r, 13, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not built yet") {
 		t.Errorf("got %v", err)
 	}
@@ -154,5 +154,57 @@ func TestVendor(t *testing.T) {
 	post, _ := exec.Command("sh", "-c", "dpkg-deb --ctrl-tarfile "+d+" | tar -xO ./postinst").Output()
 	if strings.Contains(string(post), "/home") {
 		t.Error("vendor postinst kept")
+	}
+}
+
+func TestParseDsc(t *testing.T) {
+	dsc := `-----BEGIN PGP SIGNED MESSAGE-----
+
+Format: 3.0 (quilt)
+Source: btop
+Checksums-Sha256:
+ 23d182c4efd5836f1a3cdd20004e72d09ee06b26ff9edf762b586063f7a73dd3 1279763 btop_1.4.7.orig.tar.gz
+ 229fa7b992773d61e26deb5753513b4fd4b2a9446537e9c5bf2f2b2076f227ea 7316 btop_1.4.7-1.debian.tar.xz
+Files:
+ 3130043ee82bcf04a48dac253fc2e6cb 1279763 btop_1.4.7.orig.tar.gz
+`
+	f, err := ParseDsc(dsc)
+	if err != nil || len(f) != 2 || f["btop_1.4.7-1.debian.tar.xz"] != "229fa7b992773d61e26deb5753513b4fd4b2a9446537e9c5bf2f2b2076f227ea" {
+		t.Fatalf("got %v, %v", f, err)
+	}
+	for _, bad := range []string{
+		"Checksums-Sha256:\n 23d182c4efd5836f1a3cdd20004e72d09ee06b26ff9edf762b586063f7a73dd3 1 ../x\n",
+		"Checksums-Sha256:\n zz 1 x\n",
+		"Source: x\n",
+	} {
+		if _, err := ParseDsc(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestMerge(t *testing.T) {
+	c := "Package: firefox\nConflicts: foo\nVersion: 1\n"
+	if got := merge(c, "Conflicts", []string{"firefox-esr"}); !strings.Contains(got, "Conflicts: foo, firefox-esr\n") {
+		t.Errorf("got %q", got)
+	}
+	if got := merge("Package: x\n", "Conflicts", []string{"y"}); got != "Package: x\nConflicts: y\n" {
+		t.Errorf("got %q", got)
+	}
+	if got := merge(c, "Conflicts", nil); got != c {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestReadDepends(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "depends")
+	os.WriteFile(p, []byte("shlibs:Depends=libc6 (>= 2.34), libgtk-3-0t64 (>= 3.24)\n"), 0o644)
+	d, err := readDepends(p)
+	if err != nil || strings.Join(d, "|") != "libc6 (>= 2.34)|libgtk-3-0t64 (>= 3.24)" {
+		t.Errorf("got %v, %v", d, err)
+	}
+	os.WriteFile(p, nil, 0o644)
+	if d, err := readDepends(p); err != nil || d != nil {
+		t.Errorf("empty: got %v, %v", d, err)
 	}
 }
