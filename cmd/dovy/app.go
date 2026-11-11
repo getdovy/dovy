@@ -64,6 +64,10 @@ func (a *app) load() (map[string]*catalog.Recipe, int) {
 		a.errs.Fail("catalog check: "+err.Error(), "unchanged", "dovy update", "")
 		return nil, exitFailed
 	}
+	tag, _ := catalog.Tag(a.dir)
+	for _, r := range rs {
+		r.Release = tag
+	}
 	return rs, exitOK
 }
 
@@ -256,8 +260,7 @@ func (a *app) show(args []string) int {
 			a.errs.Fail(name+" is not installed; nothing to compare", "unchanged", "dovy show "+name+" --recipe", "")
 			return exitFailed
 		}
-		a.errs.Fail("show --diff is not built yet", "unchanged", "milestone 2 (dovy-design/build-order.md)", "")
-		return exitFailed
+		return a.diff(rs[name])
 	}
 	version := r.Version
 	if v, ok := inst[name]; ok {
@@ -314,4 +317,55 @@ func or(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// diff prints what changed in r since its installed build: that release is
+// fetched and verified, then its recipe and repository files are compared.
+func (a *app) diff(r *catalog.Recipe) int {
+	out, _ := exec.Command("dpkg-query", "-W", "-f", "${X-Dovy-Release}", r.Package()).Output()
+	was, cur := strings.TrimSpace(string(out)), r.Release
+	if was == "" {
+		a.errs.Fail(r.Name+" records no catalog release", "unchanged", "dovy show "+r.Name+" --recipe", "")
+		return exitFailed
+	}
+	if was == cur {
+		fmt.Fprintln(a.out.Out, "No changes since install ("+cur+").")
+		return exitOK
+	}
+	tmp, err := os.MkdirTemp("", "dovy-")
+	if err != nil {
+		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
+		return exitFailed
+	}
+	defer os.RemoveAll(tmp)
+	old := filepath.Join(tmp, "catalog")
+	if err := catalog.Fetch(old, a.url, was, a.signers); err != nil {
+		a.errs.Fail("release "+was+": "+err.Error(), "unchanged", "check the network, then: dovy show "+r.Name+" --diff", "")
+		return exitFailed
+	}
+	paths := []string{filepath.Join("recipes", r.Name)}
+	if r.Repository != "" {
+		paths = append(paths, filepath.Join("repositories", r.Repository+".toml"))
+	}
+	a.out.Rule("", r.Name+": "+was+" → "+cur)
+	same := true
+	for _, p := range paths {
+		cmd := exec.Command("git", "diff", "--no-index", "--no-color", "--", filepath.Join(old, p), filepath.Join(a.dir, p))
+		b, err := cmd.Output()
+		if len(b) > 0 {
+			same = false
+			text := strings.NewReplacer(old+"/", "/", a.dir+"/", "/").Replace(strings.TrimRight(string(b), "\n"))
+			for _, l := range strings.Split(text, "\n") {
+				a.out.Raw(l)
+			}
+		}
+		if ee, ok := err.(*exec.ExitError); err != nil && (!ok || ee.ExitCode() != 1) {
+			a.errs.Fail("git diff: "+err.Error(), "unchanged", "", "")
+			return exitFailed
+		}
+	}
+	if same {
+		fmt.Fprintln(a.out.Out, "No changes since install.")
+	}
+	return exitOK
 }

@@ -176,6 +176,10 @@ func run(args []string, a *app, euid int) int {
 		return a.search(rest[0])
 	case "show":
 		return a.show(rest)
+	case "upgrade":
+		return a.upgrade()
+	case "check":
+		return a.check()
 	}
 	errs.Fail(args[0]+" is not built yet", "unchanged",
 		fmt.Sprintf("milestone %d (dovy-design/build-order.md)", c.milestone), "")

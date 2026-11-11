@@ -30,7 +30,7 @@ func CacheDir() (string, error) {
 func Buildable(r *catalog.Recipe) bool {
 	switch r.Kind {
 	case catalog.UpstreamBinary, catalog.Setup, catalog.VendorRepository, capability.Kind,
-		catalog.UpstreamBuild, catalog.TestingRebuild:
+		catalog.UpstreamBuild, catalog.TestingRebuild, catalog.Bundle:
 		return true
 	}
 	return false
@@ -126,6 +126,12 @@ func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
 		return "", fmt.Errorf("%s: %w", r.Name, err)
 	}
 	fields = merge(fields, "Conflicts", deb.Conflicts(r)) + deb.ReplacedField(r)
+	if r.Release != "" {
+		fields += "X-Dovy-Release: " + r.Release + "\n"
+	}
+	if err := writePin(r, raw); err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(ctl, []byte(fields), 0o644); err != nil {
 		return "", err
 	}
@@ -173,6 +179,19 @@ func Restamp(control, pkg, version, recipe string) (string, error) {
 	}
 	b.WriteString("X-Dovy-Recipe: " + recipe + "\n")
 	return b.String(), nil
+}
+
+// writePin adds the same-name replacement pin (7.3) under root.
+func writePin(r *catalog.Recipe, root string) error {
+	path, content := r.PinFile()
+	if path == "" {
+		return nil
+	}
+	p := filepath.Join(root, path)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(content), 0o644)
 }
 
 // merge adds names to a control file's relation field.

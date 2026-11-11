@@ -95,9 +95,23 @@ type Recipe struct {
 	Members       []string          `toml:"members"`
 	BuildDepends  []string          `toml:"build-depends"`
 
-	HasBuild bool     `toml:"-"` // build.sh present
-	Dir      string   `toml:"-"` // the recipe's folder
-	Replaced []string `toml:"-"` // set at install: "pkg manual|auto" (ADR 0016)
+	HasBuild   bool     `toml:"-"` // build.sh present
+	Dir        string   `toml:"-"` // the recipe's folder
+	Replaced   []string `toml:"-"` // set at install: "pkg manual|auto" (ADR 0016)
+	Release    string   `toml:"-"` // catalog release it is built from
+	Recommends []string `toml:"-"` // a bundle's member packages
+}
+
+// PinFile is the pin that keeps a same-name replacement on dovy's version
+// (principles 7.3), or "" when r replaces no package of its own name.
+func (r *Recipe) PinFile() (path, content string) {
+	for _, p := range r.Replaces {
+		if p == r.Package() {
+			return "/etc/apt/preferences.d/dovy-" + r.Name + ".pref",
+				"Package: " + p + "\nPin: release l=dovy\nPin-Priority: 1001\n"
+		}
+	}
+	return "", ""
 }
 
 // Package is the name of the .deb dovy builds for r: software keeps its
@@ -110,6 +124,9 @@ func (r *Recipe) Package() string {
 		if r.Repo != nil && r.Repo.Repack { // the vendor's package, repacked
 			return r.Name
 		}
+	}
+	if strings.HasPrefix(r.Name, "dovy-") { // dovy-defaults
+		return r.Name
 	}
 	return "dovy-" + r.Name
 }
@@ -378,6 +395,10 @@ func check(r *Recipe) []string {
 func dropIn(p string) bool {
 	if !strings.HasPrefix(p, "/etc/") || filepath.Clean(p) != p {
 		return false
+	}
+	// tuned's override: a profile here replaces Debian's of the same name.
+	if m, _ := filepath.Match("/etc/tuned/profiles/*/tuned.conf", p); m {
+		return true
 	}
 	parts := strings.Split(p, "/")
 	for _, d := range parts[2 : len(parts)-1] {

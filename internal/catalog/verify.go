@@ -21,6 +21,31 @@ var URL = "https://github.com/getdovy/dovy-catalog"
 // ErrUntrusted: no release is signed by a known key.
 var ErrUntrusted = errors.New("catalog is not signed by a trusted key")
 
+// RecordPath holds the newest release a confirmed operation used,
+// root-owned; release names only increase, so an older one is a rollback.
+var RecordPath = "/var/lib/dovy/catalog-release"
+
+// Recorded reads RecordPath; "" if none.
+func Recorded() string {
+	b, _ := os.ReadFile(RecordPath)
+	return strings.TrimSpace(string(b))
+}
+
+// Older reports whether release a is older than b.
+func Older(a, b string) bool {
+	if a == b || !tagRE.MatchString(a) || !tagRE.MatchString(b) {
+		return false
+	}
+	return newestFirst([]string{a, b})[0] == b
+}
+
+func rollback(tag string) error {
+	if r := Recorded(); Older(tag, r) {
+		return fmt.Errorf("catalog %s is older than %s, already used here: a rollback", tag, r)
+	}
+	return nil
+}
+
 // tagRE matches release tags: catalog-YYYY.MM.DD.N.
 var tagRE = regexp.MustCompile(`^catalog-(\d{4})\.(\d{2})\.(\d{2})\.(\d+)$`)
 
@@ -122,6 +147,9 @@ func Verify(dir string, signers []byte) error {
 		return err
 	}
 	if err := verifyTag(dir, tag, signers); err != nil {
+		return err
+	}
+	if err := rollback(tag); err != nil {
 		return err
 	}
 	at, err := git(dir, "rev-parse", tag+"^{commit}", "HEAD")
@@ -231,6 +259,9 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 	if c.Tag == "" {
 		return Changes{}, ErrUntrusted
 	}
+	if err := rollback(c.Tag); err != nil {
+		return Changes{}, err
+	}
 	if _, err := git(work, "reset", "-q", "--hard", c.Tag); err != nil {
 		return Changes{}, err
 	}
@@ -251,6 +282,22 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 	d := diff(before, versions(dir))
 	c.Added, c.Dropped, c.Updated = d.Added, d.Dropped, d.Updated
 	return c, nil
+}
+
+// Fetch puts release tag from url into dir, a new copy, after checking
+// its signature; for show --diff.
+func Fetch(dir, url, tag string, signers []byte) error {
+	if _, err := git(filepath.Dir(dir), "init", "-q", dir); err != nil {
+		return err
+	}
+	if _, err := git(dir, "fetch", "-q", "--no-tags", "--depth", "1", url, "refs/tags/"+tag+":refs/tags/"+tag); err != nil {
+		return err
+	}
+	if err := verifyTag(dir, tag, signers); err != nil {
+		return err
+	}
+	_, err := git(dir, "reset", "-q", "--hard", tag)
+	return err
 }
 
 // versions reads name → version from the recipes on disk, unchecked.

@@ -156,3 +156,29 @@ func TestSignersSkipsUnsafeFiles(t *testing.T) {
 		t.Errorf("warnings: %v", warned)
 	}
 }
+
+func TestRollback(t *testing.T) {
+	v1, signers := fixture(t, "v1")
+	v2, _ := fixture(t, "v2")
+	old := RecordPath
+	RecordPath = filepath.Join(t.TempDir(), "catalog-release")
+	defer func() { RecordPath = old }()
+	dir := filepath.Join(t.TempDir(), "catalog")
+	if _, err := Update(dir, v2, signers); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(RecordPath, []byte("catalog-2026.02.10.1\n"), 0o644)
+	if _, err := Update(dir, v1, signers); err == nil || !strings.Contains(err.Error(), "rollback") {
+		t.Errorf("older upstream: %v", err)
+	}
+	if err := Verify(dir, signers); err != nil {
+		t.Errorf("kept copy: %v", err)
+	}
+	os.WriteFile(RecordPath, []byte("catalog-2026.05.01.1\n"), 0o644)
+	if err := Verify(dir, signers); err == nil || !strings.Contains(err.Error(), "rollback") {
+		t.Errorf("older local copy: %v", err)
+	}
+	if !Older("catalog-2026.02.10.1", "catalog-2026.02.10.2") || Older("catalog-2026.03.01.1", "catalog-2026.02.10.9") || Older("x", "catalog-2026.01.01.1") {
+		t.Error("Older")
+	}
+}

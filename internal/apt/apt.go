@@ -9,9 +9,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 )
 
 // Action is one line of an apt-get simulation.
@@ -64,6 +67,11 @@ func NoLongerRequired(out string) []string {
 	}
 	return names
 }
+
+var interrupted atomic.Bool
+
+// Interrupted reports a Ctrl-C during an apt transaction.
+func Interrupted() bool { return interrupted.Load() }
 
 // Simulate runs `apt-get -s` as the user with extra options; nothing changes.
 func Simulate(opts []string, args ...string) (string, error) {
@@ -240,14 +248,28 @@ func Lines(r io.Reader, log io.Writer, fn func(string)) {
 // Questions were asked before, by dpkg-preconfigure (8.11). The status
 // channel is fd 3, a copy of stdout made after sudo (which closes fds above
 // 2): apt closes the status fd for maintainer scripts, so it must not be 1.
+//
+// apt runs in its own process group, so Ctrl-C reaches dovy only: dovy
+// says it is finishing the transaction and waits (8.10); Interrupted
+// reports it afterwards.
 func Run(log io.Writer, fn func(string), args ...string) error {
 	cmd := exec.Command("sudo", append([]string{"--", "env", "DEBIAN_FRONTEND=noninteractive", "sh", "-c", `exec apt-get "$@" 3>&1`, "apt-get"}, args...)...)
-	cmd.Stdin = os.Stdin
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	r, w := io.Pipe()
 	cmd.Stdout, cmd.Stderr = w, w
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt)
+	defer signal.Stop(sig)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	go func() {
+		for range sig {
+			if !interrupted.Swap(true) {
+				fn("Ctrl-C: finishing the current apt transaction, then stopping.")
+			}
+		}
+	}()
 	done := make(chan struct{})
 	go func() { Lines(r, log, fn); close(done) }()
 	err := cmd.Wait()

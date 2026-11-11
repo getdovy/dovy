@@ -176,3 +176,18 @@ func TestControlReplaces(t *testing.T) {
 		t.Errorf("same name conflicts: %v", c)
 	}
 }
+
+func TestControlBundle(t *testing.T) {
+	r := &catalog.Recipe{Name: "dovy-defaults", Kind: catalog.Bundle, Maintainer: "t", Description: "Baseline",
+		Recommends: []string{"dovy-zram", "dovy-bash"}, Release: "catalog-2026.11.11.1"}
+	got := Control(r, "1-1~dovy13", 0)
+	for _, want := range []string{"Package: dovy-defaults\n", "Architecture: all\n", "Recommends: dovy-zram, dovy-bash\n", "X-Dovy-Release: catalog-2026.11.11.1\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	y := &catalog.Recipe{Name: "yad", Kind: catalog.UpstreamBuild, Replaces: []string{"yad"}}
+	if p, c := y.PinFile(); p != "/etc/apt/preferences.d/dovy-yad.pref" || !strings.Contains(c, "Pin: release l=dovy\nPin-Priority: 1001") {
+		t.Errorf("pin: %s %q", p, c)
+	}
+}

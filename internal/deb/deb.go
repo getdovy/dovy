@@ -22,7 +22,7 @@ const Arch = "amd64"
 
 // ArchOf is the package architecture: setup packages hold no binaries.
 func ArchOf(r *catalog.Recipe) string {
-	if r.Kind == catalog.Setup || r.Kind == catalog.VendorRepository || r.Kind == capability.Kind {
+	if r.Kind == catalog.Setup || r.Kind == catalog.VendorRepository || r.Kind == catalog.Bundle || r.Kind == capability.Kind {
 		return "all"
 	}
 	return Arch
@@ -155,7 +155,13 @@ func control(r *catalog.Recipe, version string, size int64, depends []string) st
 	if c := Conflicts(r); len(c) > 0 {
 		rel += "Conflicts: " + strings.Join(c, ", ") + "\n"
 	}
+	if len(r.Recommends) > 0 {
+		rel += "Recommends: " + strings.Join(r.Recommends, ", ") + "\n"
+	}
 	rel += ReplacedField(r)
+	if r.Release != "" {
+		rel += "X-Dovy-Release: " + r.Release + "\n"
+	}
 	field := "X-Dovy-Recipe"
 	if r.Kind == capability.Kind {
 		rel += "X-Dovy-Content: " + ContentHash(r) + "\n"

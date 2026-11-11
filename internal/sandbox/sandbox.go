@@ -86,6 +86,15 @@ func (b *Box) Base() error {
 	return os.WriteFile(filepath.Join(b.Dir, "base.id"), []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644)
 }
 
+// Reset drops the base and every layer; the next build makes them again.
+func (b *Box) Reset() error {
+	os.Remove(filepath.Join(b.Dir, "base.id"))
+	if err := Remove(filepath.Join(b.Dir, "layers")); err != nil {
+		return err
+	}
+	return Remove(b.base())
+}
+
 // Layer makes name's layer, with the network, by running script in it;
 // it is kept while key and the base are unchanged.
 func (b *Box) Layer(name, key, work, script string) (string, error) {
