@@ -208,3 +208,50 @@ func TestReadDepends(t *testing.T) {
 		t.Errorf("empty: got %v, %v", d, err)
 	}
 }
+
+// fakeDeb builds a .deb for pkg and caches it as a recipe source.
+func fakeDeb(t *testing.T, cache, pkg string) catalog.Source {
+	t.Helper()
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "DEBIAN"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "boot"), 0o755)
+	os.WriteFile(filepath.Join(dir, "DEBIAN", "control"), []byte("Package: "+pkg+"\nVersion: 7.2.12-1~bpo13+1+dovy1\nArchitecture: amd64\nMaintainer: v\nDescription: d\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "boot", pkg), []byte(pkg), 0o644)
+	src := filepath.Join(t.TempDir(), pkg+".deb")
+	if b, err := exec.Command("dpkg-deb", "--root-owner-group", "-b", dir, src).CombinedOutput(); err != nil {
+		t.Fatalf("%s", b)
+	}
+	b, _ := os.ReadFile(src)
+	h := sha256.Sum256(b)
+	os.MkdirAll(filepath.Join(cache, "sources"), 0o755)
+	os.WriteFile(filepath.Join(cache, "sources", hex.EncodeToString(h[:])), b, 0o644)
+	return catalog.Source{URL: "https://example.org/" + pkg + ".deb", SHA256: hex.EncodeToString(h[:])}
+}
+
+func TestParts(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	cache := t.TempDir()
+	r := &catalog.Recipe{Name: "kernel-dovy", Kind: catalog.UpstreamBinary, Version: "7.2.12", Maintainer: "t", Description: "Kernel",
+		Sources: []catalog.Source{fakeDeb(t, cache, "linux-image-7.2.12-dovy"), fakeDeb(t, cache, "linux-headers-7.2.12-dovy")}}
+	parts, meta, err := Parts(r, 13, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 || parts[0].Package != "linux-image-7.2.12-dovy" || parts[1].Version != "7.2.12-1~dovy13" {
+		t.Fatalf("parts %+v", parts)
+	}
+	f, _ := exec.Command("dpkg-deb", "-f", parts[0].Path, "Package", "Version", "X-Dovy-Recipe").Output()
+	if string(f) != "Package: linux-image-7.2.12-dovy\nVersion: 7.2.12-1~dovy13\nX-Dovy-Recipe: kernel-dovy\n" {
+		t.Errorf("part:\n%s", f)
+	}
+	f, _ = exec.Command("dpkg-deb", "-f", meta, "Package", "Depends").Output()
+	if string(f) != "Package: kernel-dovy\nDepends: linux-image-7.2.12-dovy (= 7.2.12-1~dovy13), linux-headers-7.2.12-dovy (= 7.2.12-1~dovy13)\n" {
+		t.Errorf("meta:\n%s", f)
+	}
+	r.Sources[1] = r.Sources[0]
+	if _, _, err := Parts(r, 13, cache); err == nil || !strings.Contains(err.Error(), "given twice") {
+		t.Errorf("duplicate: %v", err)
+	}
+}

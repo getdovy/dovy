@@ -41,12 +41,7 @@ func (a *app) upgrade() int {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
 		return exitFailed
 	}
-	byRecipe := map[string]string{}
-	for p, i := range inst {
-		if i.Recipe != "" {
-			byRecipe[i.Recipe] = p
-		}
-	}
+	byRecipe := recipePackages(inst)
 	t := &txn{verb: "upgrade", release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
 	tmp, err := os.MkdirTemp("", "dovy-")

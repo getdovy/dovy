@@ -26,3 +26,19 @@ func TestUpgradeRequests(t *testing.T) {
 		t.Errorf("dovy removal not caught: %v", dovy)
 	}
 }
+
+func TestRecipePackages(t *testing.T) {
+	inst := map[string]pkgInfo{
+		"linux-image-7.2.12-dovy":   {Recipe: "kernel-dovy"},
+		"kernel-dovy":               {Recipe: "kernel-dovy"},
+		"linux-headers-7.2.12-dovy": {Recipe: "kernel-dovy"},
+		"dovy-zram":                 {Recipe: "zram"},
+		"libc6":                     {},
+	}
+	for i := 0; i < 20; i++ { // map order varies
+		m := recipePackages(inst)
+		if m["kernel-dovy"] != "kernel-dovy" || m["zram"] != "dovy-zram" || len(m) != 2 {
+			t.Fatalf("got %v", m)
+		}
+	}
+}

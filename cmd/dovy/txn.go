@@ -53,6 +53,7 @@ type txn struct {
 	keepFor  func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
 	notes    []*catalog.Recipe                    // per-user steps after install
 	prebuilt map[string]string                    // recipe → .deb already built (vendor .debs, repacks)
+	parts    map[string]string                    // package → .deb of a recipe with several (ADR 0018), installed as dependencies
 	leftover string                               // notice after remove (4.7)
 	restored map[string]string                    // replaced packages coming back → mark (ADR 0016)
 	unpinned []string                             // hosts of unpinned repositories (ADR 0017)
@@ -308,6 +309,32 @@ func (a *app) run(t *txn) int {
 			stubs = append(stubs, d)
 			continue
 		}
+		if build.IsDeb(r) && len(r.Sources) > 1 { // several packages (ADR 0018)
+			cache, err := build.CacheDir()
+			var parts []build.Part
+			var meta string
+			if err == nil {
+				parts, meta, err = build.Parts(r, t.release, cache)
+			}
+			if err != nil {
+				a.errs.Fail(err.Error(), "unchanged", "check the network, then: "+again, "")
+				return exitFailed
+			}
+			if t.prebuilt == nil {
+				t.prebuilt = map[string]string{}
+			}
+			t.prebuilt[r.Name] = meta
+			stubs = append(stubs, meta)
+			if t.parts == nil {
+				t.parts = map[string]string{}
+			}
+			for _, p := range parts {
+				t.parts[p.Package] = p.Path
+				t.versions[p.Package] = p.Version
+				stubs = append(stubs, p.Path)
+			}
+			continue
+		}
 		if build.IsDeb(r) {
 			cache, err := build.CacheDir()
 			if err == nil {
@@ -507,6 +534,9 @@ func (a *app) run(t *txn) int {
 		debs = append(debs, d)
 		a.out.Blank()
 	}
+	for _, p := range sortedKeys(t.parts) {
+		debs = append(debs, t.parts[p])
+	}
 	if conflicts, err := t.overlaps(debs); err != nil {
 		return fail(err.Error(), "unchanged", again)
 	} else if len(conflicts) > 0 {
@@ -570,7 +600,7 @@ func (a *app) run(t *txn) int {
 	}
 	var dovy []string
 	for p, v := range t.versions {
-		if !t.caps[p] {
+		if !t.caps[p] && t.parts[p] == "" { // parts come as dependencies, automatic
 			dovy = append(dovy, p+"="+v)
 		}
 	}

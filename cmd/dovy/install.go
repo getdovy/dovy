@@ -81,12 +81,7 @@ func (a *app) install(names []string) int {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
 		return exitFailed
 	}
-	byRecipe := map[string]string{}
-	for p, i := range inst {
-		if i.Recipe != "" {
-			byRecipe[i.Recipe] = p
-		}
-	}
+	byRecipe := recipePackages(inst)
 	// Hardware first, without the network; dependents inherit (6.7).
 	var refused []string
 	why := ""
@@ -261,6 +256,9 @@ func (a *app) install(names []string) int {
 			}
 			t.removing[p] = "replaced by " + r.Name
 			t.request = append(t.request, p+"-")
+			if o := rs[c]; o != nil {
+				t.expectWith(o, inst)
+			}
 			if o := rs[c]; o != nil && o.Backports && !r.Backports {
 				t.leaveBackports(o.Packages, nil, inst, nil)
 			}
@@ -296,6 +294,23 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 		if p != r.Package() {
 			t.removing[p] = "replaced by " + r.Name
 			t.request = append(t.request, p+"-")
+		}
+	}
+}
+
+// expectWith lets r's own automatic packages go with it: apt may remove
+// them by a conflict rather than as unused (4.1). Manual ones stay
+// surprises.
+func (t *txn) expectWith(r *catalog.Recipe, inst map[string]pkgInfo) {
+	manual := map[string]bool{}
+	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
+		for _, n := range strings.Fields(string(out)) {
+			manual[n] = true
+		}
+	}
+	for _, p := range r.Packages {
+		if _, ok := inst[p]; ok && !manual[p] && t.removing[p] == "" {
+			t.removing[p] = "with " + r.Name
 		}
 	}
 }

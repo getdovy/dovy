@@ -185,7 +185,7 @@ func rebuild(r *catalog.Recipe, release int, cache, work string) (string, error)
 	if len(m) != 1 {
 		return "", fmt.Errorf("%s: the source built no package %s", r.SourcePackage, r.Package())
 	}
-	return repack(r, m[0], deb.Version(r, release), cache, filepath.Join(work, "repack"))
+	return repack(r, m[0], r.Package(), deb.Version(r, release), cache, filepath.Join(work, "repack"))
 }
 
 // sourceFiles fetches a .dsc and the files it lists into work, each checked

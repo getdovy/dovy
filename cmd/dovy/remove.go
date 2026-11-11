@@ -41,6 +41,21 @@ func dpkgInstalled() (map[string]pkgInfo, error) {
 	return m, nil
 }
 
+// recipePackages maps each installed recipe to its package: the one named
+// after it when a recipe ships several (ADR 0018).
+func recipePackages(inst map[string]pkgInfo) map[string]string {
+	m := map[string]string{}
+	for p, i := range inst {
+		if i.Recipe == "" {
+			continue
+		}
+		if _, ok := m[i.Recipe]; !ok || p == i.Recipe || p == "dovy-"+i.Recipe {
+			m[i.Recipe] = p
+		}
+	}
+	return m
+}
+
 // leavesConfig reports whether removing pkg leaves config behind (4.4):
 // dpkg keeps conffiles, and keeps the package for its postrm purge step.
 func leavesConfig(pkg string) bool {
@@ -92,12 +107,7 @@ func (a *app) remove(names []string) int {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
 		return exitFailed
 	}
-	byRecipe := map[string]string{} // recipe → package
-	for p, i := range inst {
-		if i.Recipe != "" {
-			byRecipe[i.Recipe] = p
-		}
-	}
+	byRecipe := recipePackages(inst)
 	release, err := deb.Release("/etc/os-release")
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "dovy runs on Debian stable", "")
@@ -120,6 +130,17 @@ func (a *app) remove(names []string) int {
 			continue
 		}
 		t.restore(p, inst[p])
+		if r := rs[n]; r != nil {
+			t.expectWith(r, inst)
+		}
+		// The recipe's other packages (ADR 0018) go by name: apt never
+		// counts the newest kernel as unused.
+		for q, i := range inst {
+			if i.Recipe == n && q != p {
+				t.removing[q] = "with " + n
+				t.request = append(t.request, q+"-")
+			}
+		}
 	}
 	// A recipe still needed by another installed recipe stays (4.8).
 	for r, p := range byRecipe {

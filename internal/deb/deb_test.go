@@ -157,7 +157,7 @@ func TestControlCapability(t *testing.T) {
 		}
 	}
 	m := &catalog.Recipe{Name: "mesa", Kind: catalog.Setup, Packages: []string{"libgbm1"}, Conflicts: []string{"dovy-mesa-backports"}}
-	if c := Control(m, "1-1~dovy13", 1); !strings.Contains(c, "Depends: libgbm1\nConflicts: dovy-mesa-backports\n") {
+	if c := Control(m, "1-1~dovy13", 1); !strings.Contains(c, "Depends: libgbm1 (>= 0)\nConflicts: dovy-mesa-backports\n") {
 		t.Errorf("relations:\n%s", c)
 	}
 }
@@ -166,7 +166,7 @@ func TestControlReplaces(t *testing.T) {
 	r := &catalog.Recipe{Name: "firefox", Kind: catalog.VendorRepository, Maintainer: "t", Description: "Firefox",
 		Packages: []string{"firefox"}, Replaces: []string{"firefox-esr"}, Replaced: []string{"firefox-esr manual"}}
 	got := control(r, "1-1~dovy13", 1, []string{"libc6"})
-	for _, want := range []string{"Depends: firefox, libc6\n", "Conflicts: firefox-esr\n", "X-Dovy-Replaced: firefox-esr manual\n"} {
+	for _, want := range []string{"Depends: firefox (>= 0), libc6\n", "Conflicts: firefox-esr (>= 0)\n", "X-Dovy-Replaced: firefox-esr manual\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
