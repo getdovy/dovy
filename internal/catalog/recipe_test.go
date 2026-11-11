@@ -78,7 +78,6 @@ func TestLoadRefuses(t *testing.T) {
 		"install dotdot":   {map[string]string{"steam": steam + "\n[install]\n\"/usr/bin/x\" = \"../x\"\n"}, "without .."},
 		"arch suffix":      {map[string]string{"x": setup(`packages = ["libgl1:arm64"]`)}, "exact package name"},
 		"script name":      {map[string]string{"steam": steam + "\n[scripts]\nfoo = \"\"\n"}, `unknown script "foo"`},
-		"script tarball":   {map[string]string{"steam": steam + "\n[scripts]\npostinst = \"\"\n"}, "only for one vendor .deb"},
 		"wrong kind field": {map[string]string{"steam": top("members = [\"steam\"]\n")}, "members: not used by kind"},
 		"empty setup":      {map[string]string{"x": setup("")}, "setup needs packages"},
 		"missing depend":   {map[string]string{"steam": strings.Replace(steam, "requires", "depends = [\"nvidia\"]\nrequires", 1)}, `no recipe "nvidia"`},
@@ -205,7 +204,7 @@ func TestSourceKinds(t *testing.T) {
 		"dsc version":    {strings.Replace(rebuild, "1.4.7-1.dsc", "1.4.6-1.dsc", 1), "expected btop_1.4.7-<debian revision>.dsc"},
 		"no dsc":         {strings.Replace(rebuild, ".dsc", ".tar.gz", 1), "one [[source]]: the .dsc"},
 		"deps elsewhere": {strings.Replace(rebuild, "kind =", "build-depends = [\"cargo\"]\nkind =", 1), "build-depends: not used"},
-		"xz source":      {strings.Replace(build, ".tar.gz", ".tar.xz", 1), ".tar.gz only"},
+		"bz2 source":     {strings.Replace(build, ".tar.gz", ".bz2", 1), "an archive"},
 		"bad dep":        {strings.Replace(build, `"cargo"`, `"cargo (>= 1)"`, 1), "exact package name"},
 		"testing dep":    {strings.Replace(build, `"cargo"`, `"cargo/testing"`, 1), "exact package name"},
 	} {
@@ -225,6 +224,16 @@ func TestSeveralDebs(t *testing.T) {
 	}
 	bad := strings.Replace(k, "linux-headers_amd64.deb", "headers.tar.gz", 1)
 	if _, err := Load(catalogDir(t, map[string]string{"kernel-dovy": bad}), noDebian); err == nil || !strings.Contains(err.Error(), "cannot mix with tarballs") {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestLinks(t *testing.T) {
+	z := "name = \"zig\"\ndescription = \"Zig\"\nkind = \"upstream-binary\"\nversion = \"0.17.1\"\nmaintainer = \"t\"\ndebian = [13]\n\n[[source]]\nurl = \"https://example.org/zig.tar.xz\"\nsha256 = \"" + sha + "\"\n\n[install]\n\"/usr/lib/zig\" = \"zig\"\n\n[links]\n"
+	if _, err := Load(catalogDir(t, map[string]string{"zig": z + "\"/usr/bin/zig\" = \"/usr/lib/zig/zig\"\n"}), noDebian); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(catalogDir(t, map[string]string{"zig": z + "\"/usr/bin/zig\" = \"/etc/passwd\"\n"}), noDebian); err == nil || !strings.Contains(err.Error(), "not installed by the recipe") {
 		t.Errorf("got %v", err)
 	}
 }

@@ -74,7 +74,7 @@ func upstream(r *catalog.Recipe, release int, cache, work string) (string, error
 		if err != nil {
 			return "", err
 		}
-		if err := unpack.TarGz(p, src); err != nil {
+		if err := unpack.Archive(p, s.URL, src); err != nil {
 			return "", fmt.Errorf("%s: %w", s.URL, err)
 		}
 	}

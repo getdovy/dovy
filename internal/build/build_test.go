@@ -3,6 +3,7 @@ package build
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,5 +254,44 @@ func TestParts(t *testing.T) {
 	r.Sources[1] = r.Sources[0]
 	if _, _, err := Parts(r, 13, cache); err == nil || !strings.Contains(err.Error(), "given twice") {
 		t.Errorf("duplicate: %v", err)
+	}
+}
+
+func TestVendorDefaults(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	cache := t.TempDir()
+	src := fakeDeb(t, cache, "slack-desktop")
+	r := &catalog.Recipe{Name: "slack-desktop", Kind: catalog.UpstreamBinary, Version: "4.53.283", Sources: []catalog.Source{src},
+		Files: []catalog.File{{Path: "/etc/default/slack", Content: "\nrepo_add_once=\"false\"\n"}}}
+	d, err := Recipe(r, 13, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := exec.Command("sh", "-c", "dpkg-deb --fsys-tarfile "+d+" | tar -xO ./etc/default/slack").Output()
+	cf, _ := exec.Command("sh", "-c", "dpkg-deb --ctrl-tarfile "+d+" | tar -xO ./conffiles").Output()
+	if string(body) != "repo_add_once=\"false\"\n" || string(cf) != "/etc/default/slack\n" {
+		t.Errorf("file %q conffiles %q", body, cf)
+	}
+}
+
+func TestTidyConffiles(t *testing.T) {
+	raw := t.TempDir()
+	cf := filepath.Join(raw, "DEBIAN", "conffiles")
+	if err := os.MkdirAll(filepath.Dir(cf), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{"\n": "", "/etc/a\n\n/etc/b": "/etc/a\n/etc/b\n"} {
+		if err := os.WriteFile(cf, []byte(in), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := tidyConffiles(raw); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(cf)
+		if want == "" && !errors.Is(err, os.ErrNotExist) || want != "" && string(got) != want {
+			t.Errorf("%q: got %q, %v", in, got, err)
+		}
 	}
 }

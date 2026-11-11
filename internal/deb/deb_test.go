@@ -191,3 +191,39 @@ func TestControlBundle(t *testing.T) {
 		t.Errorf("pin: %s %q", p, c)
 	}
 }
+
+func TestStageDirectory(t *testing.T) {
+	src, stage := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(src, "nvim", "bin"), 0o755)
+	os.MkdirAll(filepath.Join(src, "nvim", "share"), 0o755)
+	os.WriteFile(filepath.Join(src, "nvim", "bin", "nvim"), []byte("x"), 0o755)
+	os.WriteFile(filepath.Join(src, "nvim", "share", "a.vim"), []byte("x"), 0o644)
+	os.Symlink("../share/a.vim", filepath.Join(src, "nvim", "bin", "link"))
+	r := &catalog.Recipe{Name: "neovim", Install: map[string]string{"/usr/lib/nvim": "nvim"}}
+	if err := Stage(r, src, stage); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(stage, "usr/lib/nvim/bin/nvim")); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("exec: %v %v", fi, err)
+	}
+	if l, _ := os.Readlink(filepath.Join(stage, "usr/lib/nvim/bin/link")); l != "../share/a.vim" {
+		t.Errorf("link %q", l)
+	}
+	os.Symlink("/etc/passwd", filepath.Join(src, "nvim", "bad"))
+	if err := Stage(r, src, t.TempDir()); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("outside link: %v", err)
+	}
+}
+
+func TestStageLinks(t *testing.T) {
+	src, stage := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(src, "zig"), 0o755)
+	os.WriteFile(filepath.Join(src, "zig", "zig"), []byte("x"), 0o755)
+	r := &catalog.Recipe{Name: "zig", Install: map[string]string{"/usr/lib/zig": "zig"}, Links: map[string]string{"/usr/bin/zig": "/usr/lib/zig/zig"}}
+	if err := Stage(r, src, stage); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := os.Readlink(filepath.Join(stage, "usr/bin/zig")); l != "/usr/lib/zig/zig" {
+		t.Errorf("link %q", l)
+	}
+}
