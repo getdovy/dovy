@@ -602,6 +602,162 @@ debian = [13]
 conflicts = ["tuned-profiles"]
 packages = ["power-profiles-daemon"]
 EOF
+recipe config-system <<'EOF'
+name = "config-system"
+description = "System tuning: writeback limits, memory, BFQ for hard disks and SD, short shutdown timeout, quieter logs; applies after a reboot"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+
+[[file]]
+path = "/etc/sysctl.d/00-dovy-system.conf"
+content = """
+# Fixed writeback limits instead of 20%/10% of RAM, which lets gigabytes of
+# unwritten data build up (USB copies report done long before they are).
+vm.dirty_bytes = 268435456
+vm.dirty_background_bytes = 134217728
+# Keep file metadata cached longer (default 100).
+vm.vfs_cache_pressure = 50
+# No proactive compaction: it adds latency jitter (default 20).
+vm.compaction_proactiveness = 0
+
+# No hard lockup detector: frees a CPU performance counter. The soft lockup
+# detector stays.
+kernel.nmi_watchdog = 0
+# No kernel messages on the console below errors.
+kernel.printk = 3 3 3 3
+# Kernel addresses hidden from regular users; root still sees them.
+kernel.kptr_restrict = 1
+
+# Find a working packet size when a network path drops large packets.
+net.ipv4.tcp_mtu_probing = 1
+
+# File watchers for IDEs and sync tools.
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_user_instances = 8192
+"""
+
+[[file]]
+path = "/etc/udev/rules.d/60-dovy-scheduler.rules"
+content = """
+# BFQ for hard disks and SD/eMMC keeps the desktop responsive while the
+# disk is busy. SATA SSDs keep mq-deadline, NVMe keeps none.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*[!0-9]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="mmcblk*[0-9]", ATTR{queue/scheduler}="bfq"
+"""
+
+[[file]]
+path = "/etc/tmpfiles.d/dovy-thp.conf"
+content = """
+# Debian's huge pages are "always". Stall-free compaction for memory that
+# does not ask for them; direct compaction only for memory that does.
+w /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise
+# Split huge pages more than 80% empty, so they do not waste memory
+# (default 511, never split).
+w /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none - - - - 409
+"""
+
+[[file]]
+path = "/etc/modprobe.d/dovy-blacklist.conf"
+content = """
+# No motherboard beeper.
+blacklist pcspkr
+blacklist snd-pcsp
+# Hardware watchdog timers: Debian's systemd does not use them unless
+# RuntimeWatchdogSec= is set.
+blacklist iTCO_wdt
+blacklist sp5100_tco
+blacklist wdat_wdt
+"""
+
+[[file]]
+path = "/etc/systemd/system.conf.d/00-dovy-timeout.conf"
+content = """
+# A stuck service delays shutdown by 15 s, not 90 s.
+[Manager]
+DefaultTimeoutStopSec=15s
+"""
+
+[[file]]
+path = "/etc/systemd/user.conf.d/00-dovy-timeout.conf"
+content = """
+# A stuck user service delays logout and shutdown by 15 s, not 90 s.
+[Manager]
+DefaultTimeoutStopSec=15s
+"""
+
+[[file]]
+path = "/etc/systemd/journald.conf.d/00-dovy-size.conf"
+content = """
+# The journal keeps at most 1 GB (default 10% of the disk, up to 4 GB).
+[Journal]
+SystemMaxUse=1G
+"""
+
+[[file]]
+path = "/etc/systemd/system/rtkit-daemon.service.d/00-dovy-loglevel.conf"
+content = """
+# rtkit logs every priority change; keep info and above.
+[Service]
+LogLevelMax=info
+"""
+EOF
+recipe scx-scheds <<'EOF'
+name = "scx-scheds"
+description = "sched_ext CPU schedulers (scx_bpfland, scx_lavd, scx_rusty and others) and scxtop"
+kind = "upstream-binary"
+version = "1.1.4"
+maintainer = "test"
+debian = [13]
+
+[[source]]
+url = "https://github.com/hmwassim/scx-bundler/releases/download/v1.1.4/scx-scheds_1.1.4-1_amd64.deb"
+sha256 = "874667185efe83cd6653be25de269861abdbba4e8a0ade72169f42ae235738f7"
+EOF
+recipe scx-tools <<'EOF'
+name = "scx-tools"
+description = "scx_loader D-Bus service, scxctl and scxtui, to start and switch sched_ext schedulers"
+kind = "upstream-binary"
+version = "1.1.3"
+maintainer = "test"
+debian = [13]
+depends = ["scx-scheds"]
+
+[[source]]
+url = "https://github.com/hmwassim/scx-bundler/releases/download/v1.1.4/scx-tools_1.1.3-1_amd64.deb"
+sha256 = "67a170869b0bfc9a69b8f4936b1206442466e3c6c2b4c4b3ec24bb04898e5a30"
+EOF
+recipe scx-switcher <<'EOF'
+name = "scx-switcher"
+description = "Window and tray icon to start, stop and switch sched_ext schedulers"
+kind = "upstream-binary"
+version = "3.0.0"
+maintainer = "test"
+debian = [13]
+depends = ["scx-scheds"]
+
+[[source]]
+url = "https://github.com/hmwassim/scx-switcher/releases/download/v3.0.0/scx-switcher_3.0.0-1_amd64.deb"
+sha256 = "932e508e7a8cdf9e7e35f1a8dc0999d204a216e240a59fad6f1c49764b853481"
+EOF
+recipe kernel-dovy <<'EOF'
+name = "kernel-dovy"
+description = "Debian's backports kernel rebuilt for desktops: 1000 Hz, full preemption, sched_ext patches"
+kind = "upstream-binary"
+version = "7.2.12"
+maintainer = "test"
+debian = [13]
+secure-boot = "unsigned-kernel"
+
+[[source]]
+url = "https://github.com/getdovy/dovy-kernel/releases/download/v7.2.12/linux-image_amd64.deb"
+sha256 = "f08d26ecd5e609c2ee8b26744cf63d4692a26533de7ccea97960b112b14aeca5"
+
+[[source]]
+url = "https://github.com/getdovy/dovy-kernel/releases/download/v7.2.12/linux-headers_amd64.deb"
+sha256 = "7dd1d6e850cc9dcd9cf0b229fbc1758d87e0643e7fdaed93e7f6b20d92e52fd8"
+EOF
 recipe tuned-profiles <<'EOF'
 name = "tuned-profiles"
 description = "Power profiles from tuned, with a desktop performance profile"
@@ -683,7 +839,7 @@ kind = "bundle"
 version = "1"
 maintainer = "test"
 debian = [13]
-members = ["kernel-backports", "firmware-backports", "mesa-backports", "zram", "config-pipewire", "power-profiles", "archivers", "cli-tools", "config-bash"]
+members = ["kernel-backports", "firmware-backports", "mesa-backports", "zram", "config-pipewire", "power-profiles", "archivers", "cli-tools", "config-bash", "config-system"]
 EOF
 commit "install recipes"
 T5=catalog-2026.04.10.1
@@ -713,7 +869,7 @@ maintainer = "test"
 debian = [13]
 packages = ["fonts-noto-color-emoji"]
 EOF
-sed -i 's/^version = "1"$/version = "2"/; s/"config-bash"\]/"config-bash", "emoji"]/' "$tmp/repo/recipes/dovy-defaults/recipe.toml"
+sed -i 's/^version = "1"$/version = "2"/; s/"config-system"\]/"config-system", "emoji"]/' "$tmp/repo/recipes/dovy-defaults/recipe.toml"
 commit "upgrade test release"
 T6=catalog-2026.04.11.1
 tag trusted $T6
