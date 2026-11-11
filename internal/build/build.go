@@ -48,6 +48,8 @@ func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
 	}
 	defer sandbox.Remove(work)
 	switch {
+	case IsDeb(r) && len(r.Sources) > 1:
+		return "", fmt.Errorf("%s: several packages: use Parts", r.Name)
 	case IsDeb(r):
 		return vendor(r, release, cache, work)
 	case r.Kind == catalog.UpstreamBuild:
@@ -80,9 +82,62 @@ func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
 	return deb.Build(r, deb.Version(r, release), stage, filepath.Join(cache, "debs"))
 }
 
-// IsDeb reports a vendor .deb recipe.
+// IsDeb reports a vendor .deb recipe: every source a .deb.
 func IsDeb(r *catalog.Recipe) bool {
-	return r.Kind == catalog.UpstreamBinary && len(r.Sources) == 1 && strings.HasSuffix(r.Sources[0].URL, ".deb")
+	if r.Kind != catalog.UpstreamBinary || len(r.Sources) == 0 {
+		return false
+	}
+	for _, s := range r.Sources {
+		if !strings.HasSuffix(s.URL, ".deb") {
+			return false
+		}
+	}
+	return true
+}
+
+// Part is one repacked vendor package of a recipe with several (ADR 0018).
+type Part struct{ Package, Version, Path string }
+
+// Parts repacks each .deb source of r under its own name, then builds r's
+// own package depending on each at its exact version (ADR 0018). It
+// returns the parts and r's package.
+func Parts(r *catalog.Recipe, release int, cache string) ([]Part, string, error) {
+	work := filepath.Join(cache, "build", r.Name)
+	if err := os.RemoveAll(work); err != nil {
+		return nil, "", err
+	}
+	defer os.RemoveAll(work)
+	version := deb.Version(r, release)
+	var parts []Part
+	var depends []string
+	seen := map[string]bool{}
+	for i, s := range r.Sources {
+		p, err := fetch.Get(s.URL, s.SHA256, filepath.Join(cache, "sources"))
+		if err != nil {
+			return nil, "", err
+		}
+		d, err := repack(r, p, "", version, cache, filepath.Join(work, fmt.Sprint(i)))
+		if err != nil {
+			return nil, "", err
+		}
+		out, err := exec.Command("dpkg-deb", "-f", d, "Package").Output()
+		if err != nil {
+			return nil, "", err
+		}
+		name := strings.TrimSpace(string(out))
+		if seen[name] || name == r.Package() {
+			return nil, "", fmt.Errorf("%s: package %s given twice", r.Name, name)
+		}
+		seen[name] = true
+		parts = append(parts, Part{name, version, d})
+		depends = append(depends, name+" (= "+version+")")
+	}
+	stage := filepath.Join(work, "meta")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return nil, "", err
+	}
+	meta, err := deb.BuildWith(r, version, stage, filepath.Join(cache, "debs"), depends)
+	return parts, meta, err
 }
 
 // vendor repacks a vendor .deb (principles 6.2, 2.6): dovy's version and
@@ -94,7 +149,7 @@ func vendor(r *catalog.Recipe, release int, cache, work string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	return repack(r, p, deb.Version(r, release), cache, work)
+	return repack(r, p, r.Package(), deb.Version(r, release), cache, work)
 }
 
 // Repack repacks a vendor .deb downloaded from a repacked repository
@@ -105,10 +160,12 @@ func Repack(r *catalog.Recipe, path, version, cache string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(work)
-	return repack(r, path, version, cache, work)
+	return repack(r, path, r.Package(), version, cache, work)
 }
 
-func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
+// repack restamps a vendor .deb as dovy's; want is the package name it
+// must have, or "" for any (a part, ADR 0018).
+func repack(r *catalog.Recipe, p, want, version, cache, work string) (string, error) {
 	raw := filepath.Join(work, "raw")
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return "", err
@@ -121,16 +178,24 @@ func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fields, err := Restamp(string(b), r.Package(), version, r.Name)
+	pkg := want
+	if pkg == "" {
+		pkg = field(string(b), "Package")
+	}
+	fields, err := Restamp(string(b), pkg, version, r.Name)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", r.Name, err)
 	}
-	fields = merge(fields, "Conflicts", deb.Conflicts(r)) + deb.ReplacedField(r)
+	if want != "" {
+		fields = merge(fields, "Conflicts", deb.Conflicts(r)) + deb.ReplacedField(r)
+	}
 	if r.Release != "" {
 		fields += "X-Dovy-Release: " + r.Release + "\n"
 	}
-	if err := writePin(r, raw); err != nil {
-		return "", err
+	if want != "" {
+		if err := writePin(r, raw); err != nil {
+			return "", err
+		}
 	}
 	if err := os.WriteFile(ctl, []byte(fields), 0o644); err != nil {
 		return "", err
@@ -154,7 +219,7 @@ func repack(r *catalog.Recipe, p, version, cache, work string) (string, error) {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return "", err
 	}
-	d := filepath.Join(out, fmt.Sprintf("%s_%s_%s.deb", r.Package(), version, arch))
+	d := filepath.Join(out, fmt.Sprintf("%s_%s_%s.deb", pkg, version, arch))
 	if b, err := exec.Command("dpkg-deb", "--root-owner-group", "-b", raw, d).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("dpkg-deb -b: %s", strings.TrimSpace(string(b)))
 	}

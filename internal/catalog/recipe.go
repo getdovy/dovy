@@ -363,6 +363,18 @@ func check(r *Recipe) []string {
 		if !has["source"] {
 			add("upstream-binary needs [[source]]")
 		}
+		debs := 0
+		for _, s := range r.Sources {
+			if strings.HasSuffix(s.URL, ".deb") {
+				debs++
+			}
+		}
+		if debs > 0 && debs != len(r.Sources) { // several packages (ADR 0018): .debs only
+			add("source: .deb sources cannot mix with tarballs")
+		}
+		if debs > 0 && has["install"] {
+			add("install: only for tarballs")
+		}
 	case VendorRepository:
 		if r.Repository == "" || len(r.Packages) == 0 {
 			add("vendor-repository needs repository and packages")

@@ -216,3 +216,15 @@ func TestSourceKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestSeveralDebs(t *testing.T) {
+	k := "name = \"kernel-dovy\"\ndescription = \"Kernel\"\nkind = \"upstream-binary\"\nversion = \"7.2.12\"\nmaintainer = \"t\"\ndebian = [13]\nsecure-boot = \"unsigned-kernel\"\n\n" +
+		"[[source]]\nurl = \"https://example.org/linux-image_amd64.deb\"\nsha256 = \"" + sha + "\"\n\n[[source]]\nurl = \"https://example.org/linux-headers_amd64.deb\"\nsha256 = \"" + sha + "\"\n"
+	if _, err := Load(catalogDir(t, map[string]string{"kernel-dovy": k}), noDebian); err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(k, "linux-headers_amd64.deb", "headers.tar.gz", 1)
+	if _, err := Load(catalogDir(t, map[string]string{"kernel-dovy": bad}), noDebian); err == nil || !strings.Contains(err.Error(), "cannot mix with tarballs") {
+		t.Errorf("got %v", err)
+	}
+}

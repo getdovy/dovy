@@ -128,12 +128,14 @@ func Control(r *catalog.Recipe, version string, size int64) string {
 }
 
 // Conflicts is what r's package conflicts with: the other half of a pair,
-// and replaced Debian packages of another name (ADR 0016).
+// and replaced Debian packages of another name (ADR 0016). Those are
+// versioned, so they match the real package only, never one that provides
+// its name (tuned-ppd provides power-profiles-daemon).
 func Conflicts(r *catalog.Recipe) []string {
 	c := append([]string{}, r.Conflicts...)
 	for _, p := range r.Replaces {
 		if p != r.Package() {
-			c = append(c, p)
+			c = append(c, p+" (>= 0)")
 		}
 	}
 	return c
@@ -149,7 +151,13 @@ func ReplacedField(r *catalog.Recipe) string {
 
 func control(r *catalog.Recipe, version string, size int64, depends []string) string {
 	var rel string
-	if d := append(append([]string{}, r.Packages...), depends...); len(d) > 0 {
+	// The recipe's packages, versioned so only the real package satisfies
+	// them, never one that provides the name.
+	var d []string
+	for _, p := range r.Packages {
+		d = append(d, p+" (>= 0)")
+	}
+	if d = append(d, depends...); len(d) > 0 {
 		rel += "Depends: " + strings.Join(d, ", ") + "\n"
 	}
 	if c := Conflicts(r); len(c) > 0 {
