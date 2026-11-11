@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -67,6 +68,12 @@ func Stage(r *catalog.Recipe, src, stage string) error {
 		if err != nil {
 			return fmt.Errorf("install %s: %s not in the sources", dst, from)
 		}
+		if fi.IsDir() { // a whole folder (runtime files, bundled apps)
+			if err := copyTree(p, filepath.Join(stage, dst)); err != nil {
+				return fmt.Errorf("install %s: %w", dst, err)
+			}
+			continue
+		}
 		if !fi.Mode().IsRegular() {
 			return fmt.Errorf("install %s: %s is not a regular file", dst, from)
 		}
@@ -76,6 +83,15 @@ func Stage(r *catalog.Recipe, src, stage string) error {
 		}
 		if err := copyFile(p, filepath.Join(stage, dst), mode); err != nil {
 			return err
+		}
+	}
+	for l, t := range r.Links {
+		p := filepath.Join(stage, l)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.Symlink(t, p); err != nil {
+			return fmt.Errorf("link %s: %w", l, err)
 		}
 	}
 	return nil
@@ -190,9 +206,17 @@ Description: %s
 // conffiles lists the staged files dpkg keeps when the user edits them (8.5).
 func conffiles(r *catalog.Recipe, stage string) string {
 	var b strings.Builder
+	var paths []string
 	for _, f := range r.Files {
-		if _, err := os.Stat(filepath.Join(stage, f.Path)); err == nil && strings.HasPrefix(f.Path, "/etc/") {
-			b.WriteString(f.Path + "\n")
+		paths = append(paths, f.Path)
+	}
+	for dst := range r.Install {
+		paths = append(paths, dst)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if _, err := os.Stat(filepath.Join(stage, p)); err == nil && strings.HasPrefix(p, "/etc/") {
+			b.WriteString(p + "\n")
 		}
 	}
 	return b.String()
@@ -208,6 +232,38 @@ func installedSize(dir string) (int64, error) {
 		return err
 	})
 	return n, err
+}
+
+// copyTree copies a folder: files keep their executable bit, links must
+// stay inside it (2.10).
+func copyTree(src, dst string) error {
+	return filepath.Walk(src, func(p string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		out := filepath.Join(dst, rel)
+		switch {
+		case fi.IsDir():
+			return os.MkdirAll(out, 0o755)
+		case fi.Mode()&os.ModeSymlink != 0:
+			t, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			if c := filepath.Clean(filepath.Join(filepath.Dir(rel), t)); filepath.IsAbs(t) || c == ".." || strings.HasPrefix(c, "../") {
+				return fmt.Errorf("%s: link points outside", rel)
+			}
+			return os.Symlink(t, out)
+		case fi.Mode().IsRegular():
+			mode := os.FileMode(0o644)
+			if fi.Mode().Perm()&0o111 != 0 {
+				mode = 0o755
+			}
+			return copyFile(p, out, mode)
+		}
+		return fmt.Errorf("%s: unsupported file type", rel)
+	})
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

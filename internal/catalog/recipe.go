@@ -85,6 +85,7 @@ type Recipe struct {
 
 	Sources       []Source          `toml:"source"`
 	Install       map[string]string `toml:"install"`
+	Links         map[string]string `toml:"links"` // installed link → what it points to
 	Scripts       map[string]string `toml:"scripts"`
 	Repository    string            `toml:"repository"`
 	Repo          *Repository       `toml:"-"` // the repository it names
@@ -285,11 +286,24 @@ func check(r *Recipe) []string {
 	}
 	for _, dst := range sorted(r.Install) {
 		src := r.Install[dst]
-		if !strings.HasPrefix(dst, "/usr/") || filepath.Clean(dst) != dst {
-			add("install %s: an absolute path under /usr/", dst)
+		if !(strings.HasPrefix(dst, "/usr/") || dropIn(dst)) || filepath.Clean(dst) != dst {
+			add("install %s: an absolute path under /usr/, or a drop-in under /etc", dst)
 		}
 		if src == "" || filepath.IsAbs(src) || filepath.Clean(src) != src || strings.HasPrefix(src, "..") {
 			add("install %s: source %q must be relative, without ..", dst, src)
+		}
+	}
+	for _, l := range sorted(r.Links) { // to a file the recipe installs
+		t := r.Links[l]
+		if !strings.HasPrefix(l, "/usr/") || filepath.Clean(l) != l {
+			add("links %s: an absolute path under /usr/", l)
+		}
+		ok := false
+		for dst := range r.Install {
+			ok = ok || t == dst || strings.HasPrefix(t, dst+"/")
+		}
+		if !ok || filepath.Clean(t) != t {
+			add("links %s: %s is not installed by the recipe", l, t)
 		}
 	}
 	for _, k := range sorted(r.Scripts) {
@@ -302,11 +316,15 @@ func check(r *Recipe) []string {
 			add("scripts: %s can only be dropped (\"\")", k)
 		}
 	}
-	if len(r.Scripts) > 0 && r.Kind == UpstreamBinary && (len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb")) {
-		add("scripts: only for one vendor .deb source")
+	if len(r.Scripts) > 0 && r.Kind == UpstreamBinary && len(r.Sources) > 1 && strings.HasSuffix(r.Sources[0].URL, ".deb") {
+		add("scripts: not with several vendor packages (ADR 0018)")
 	}
 	for _, f := range r.Files {
-		if !dropIn(f.Path) {
+		if r.Kind == UpstreamBinary { // a vendor .deb's own scripts read it (2.6)
+			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) || len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb") {
+				add("file %s: only /etc/default/<name>, for one vendor .deb", f.Path)
+			}
+		} else if !dropIn(f.Path) {
 			add("file %s: only drop-ins under /etc/**/*.d/", f.Path)
 		}
 	}
@@ -321,6 +339,7 @@ func check(r *Recipe) []string {
 	has := map[string]bool{
 		"source":         len(r.Sources) > 0,
 		"install":        len(r.Install) > 0,
+		"links":          len(r.Links) > 0,
 		"scripts":        len(r.Scripts) > 0,
 		"repository":     r.Repository != "",
 		"source-package": r.SourcePackage != "",
@@ -332,11 +351,11 @@ func check(r *Recipe) []string {
 		"build-depends":  len(r.BuildDepends) > 0,
 	}
 	allowed := map[string][]string{
-		UpstreamBuild:    {"source", "build.sh", "build-depends", "packages"},
-		UpstreamBinary:   {"source", "install", "scripts"},
+		UpstreamBuild:    {"source", "build.sh", "build-depends", "packages", "scripts"},
+		UpstreamBinary:   {"source", "install", "scripts", "file", "packages", "links"},
 		VendorRepository: {"repository", "packages", "scripts"},
 		TestingRebuild:   {"source-package", "source", "build.sh", "packages"},
-		Setup:            {"packages", "backports", "file"},
+		Setup:            {"packages", "backports", "file", "scripts"},
 		Bundle:           {"members"},
 	}
 	ok, known := allowed[r.Kind]
@@ -355,8 +374,8 @@ func check(r *Recipe) []string {
 			add("upstream-build needs [[source]] and build.sh")
 		}
 		for _, s := range r.Sources {
-			if !strings.HasSuffix(s.URL, ".tar.gz") {
-				add("source %s: .tar.gz only", s.URL)
+			if !strings.HasSuffix(s.URL, ".tar.gz") && !strings.HasSuffix(s.URL, ".tar.xz") && !strings.HasSuffix(s.URL, ".zip") {
+				add("source %s: an archive (.tar.gz, .tar.xz, .zip)", s.URL)
 			}
 		}
 	case UpstreamBinary:

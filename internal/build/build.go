@@ -65,14 +65,11 @@ func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
 		return "", err
 	}
 	for _, s := range r.Sources {
-		if !strings.HasSuffix(s.URL, ".tar.gz") {
-			return "", fmt.Errorf("%s: only .tar.gz sources for now", s.URL)
-		}
 		p, err := fetch.Get(s.URL, s.SHA256, filepath.Join(cache, "sources"))
 		if err != nil {
 			return "", err
 		}
-		if err := unpack.TarGz(p, src); err != nil {
+		if err := unpack.Archive(p, s.URL, src); err != nil {
 			return "", fmt.Errorf("%s: %w", s.URL, err)
 		}
 	}
@@ -196,8 +193,14 @@ func repack(r *catalog.Recipe, p, want, version, cache, work string) (string, er
 		if err := writePin(r, raw); err != nil {
 			return "", err
 		}
+		if err := writeDefaults(r, raw); err != nil {
+			return "", err
+		}
 	}
 	if err := os.WriteFile(ctl, []byte(fields), 0o644); err != nil {
+		return "", err
+	}
+	if err := tidyConffiles(raw); err != nil {
 		return "", err
 	}
 	for name, body := range r.Scripts {
@@ -257,6 +260,52 @@ func writePin(r *catalog.Recipe, root string) error {
 		return err
 	}
 	return os.WriteFile(p, []byte(content), 0o644)
+}
+
+// writeDefaults adds the recipe's /etc/default files, which configure the
+// vendor's own scripts (2.6), as conffiles.
+func writeDefaults(r *catalog.Recipe, raw string) error {
+	if len(r.Files) == 0 {
+		return nil
+	}
+	cf := filepath.Join(raw, "DEBIAN", "conffiles")
+	old, _ := os.ReadFile(cf)
+	list := string(old)
+	for _, f := range r.Files {
+		p := filepath.Join(raw, f.Path)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(strings.TrimPrefix(f.Content, "\n")), 0o644); err != nil {
+			return err
+		}
+		if !strings.Contains("\n"+list, "\n"+f.Path+"\n") {
+			list += f.Path + "\n"
+		}
+	}
+	return os.WriteFile(cf, []byte(list), 0o644)
+}
+
+// tidyConffiles drops blank lines from a vendor's conffiles, which
+// dpkg-deb -b refuses, and the file when nothing is left.
+func tidyConffiles(raw string) error {
+	cf := filepath.Join(raw, "DEBIAN", "conffiles")
+	b, err := os.ReadFile(cf)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	var list string
+	for _, l := range strings.Split(string(b), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			list += l + "\n"
+		}
+	}
+	if list == "" {
+		return os.Remove(cf)
+	}
+	return os.WriteFile(cf, []byte(list), 0o644)
 }
 
 // merge adds names to a control file's relation field.
