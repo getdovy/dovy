@@ -396,6 +396,11 @@ func RepoSource(q *catalog.Repository, keyring string, pkgs []string) string {
 // the repository (5.10): the host at 1, those packages at 100.
 func RepoPin(q *catalog.Repository, pkgs []string) string {
 	h := Host(q.URI)
+	var names []string
+	for _, p := range pkgs {
+		names = append(names, strings.TrimSuffix(p, ":i386")) // pins name packages, not architectures
+	}
+	pkgs = names
 	return fmt.Sprintf("Package: *\nPin: origin %s\nPin-Priority: 1\n\nPackage: %s\nPin: origin %s\nPin-Priority: 100\n",
 		h, strings.Join(pkgs, " "), h)
 }
