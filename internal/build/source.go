@@ -26,6 +26,10 @@ func Sourced(r *catalog.Recipe) bool {
 // LogPath is where a source build's output goes.
 func LogPath(cache, name string) string { return filepath.Join(cache, "logs", name+".log") }
 
+// Refresh remakes the sandbox's base before the next source build: set by
+// upgrade (ADR 0015). Layers follow the new base.
+var Refresh bool
+
 // box opens the sandbox, making its base on first use.
 func box(cache, name string) (*sandbox.Box, func(), error) {
 	if err := sandbox.Check(); err != nil {
@@ -44,6 +48,13 @@ func box(cache, name string) (*sandbox.Box, func(), error) {
 		return nil, nil, err
 	}
 	b := &sandbox.Box{Dir: filepath.Join(cache, "sandbox"), Codename: codename, Log: f}
+	if Refresh {
+		Refresh = false
+		if err := b.Reset(); err != nil {
+			f.Close()
+			return nil, nil, err
+		}
+	}
 	if err := b.Base(); err != nil {
 		f.Close()
 		return nil, nil, err
@@ -93,6 +104,9 @@ func upstream(r *catalog.Recipe, release int, cache, work string) (string, error
 	}
 	depends, err := readDepends(filepath.Join(work, "depends"))
 	if err != nil {
+		return "", err
+	}
+	if err := writePin(r, stage); err != nil {
 		return "", err
 	}
 	return deb.BuildWith(r, deb.Version(r, release), stage, filepath.Join(cache, "debs"), depends)

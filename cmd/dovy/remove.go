@@ -278,6 +278,13 @@ func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[strin
 		if r == nil {
 			continue
 		}
+		for _, m := range r.Members { // a bundle's members are recipes of their own (6.8)
+			if o := rs[m]; o != nil && !contains(names, m) {
+				if _, ok := inst[o.Package()]; ok {
+					kept = append(kept, ui.Pair{Item: m, Reason: "member of " + n + "; remove it on its own"})
+				}
+			}
+		}
 		for _, p := range r.Packages {
 			if removing[p] || seen[p] {
 				continue

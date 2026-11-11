@@ -204,6 +204,12 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	if r.Repo != nil && !r.Repo.Repack { // its source, key and pin are the repository package's
 		x.Packages = append(x.Packages, Package("repo-"+r.Repo.Name))
 	}
+	x.Recommends = nil
+	for _, m := range r.Members {
+		if o := rs[m]; o != nil {
+			x.Recommends = append(x.Recommends, o.Package())
+		}
+	}
 	x.Conflicts = nil
 	for _, c := range r.Conflicts {
 		if o := rs[c]; o != nil {

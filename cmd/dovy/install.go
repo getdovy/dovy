@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -19,7 +20,8 @@ import (
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// resolve returns the named recipes and their depends, dependencies first.
+// resolve returns the named recipes, their depends and bundle members,
+// dependencies first.
 func resolve(rs map[string]*catalog.Recipe, names []string) ([]*catalog.Recipe, string) {
 	var order []*catalog.Recipe
 	seen := map[string]bool{}
@@ -33,7 +35,7 @@ func resolve(rs map[string]*catalog.Recipe, names []string) ([]*catalog.Recipe, 
 		if r == nil {
 			return n
 		}
-		for _, d := range r.Depends {
+		for _, d := range append(append([]string{}, r.Depends...), r.Members...) {
 			if missing := visit(d); missing != "" {
 				return missing
 			}
@@ -100,6 +102,31 @@ func (a *app) install(names []string) int {
 	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
 	needs := map[string][]string{} // capability → recipes
+	// A bundle member whose other half is installed or asked for is skipped:
+	// the user's choice stands (6.8).
+	member := map[string]string{}
+	for _, r := range order {
+		for _, m := range r.Members {
+			member[m] = r.Name
+		}
+	}
+	var kept []*catalog.Recipe
+	for _, r := range order {
+		skip := ""
+		if b := member[r.Name]; b != "" && !contains(names, r.Name) {
+			for _, c := range r.Conflicts {
+				if _, ok := byRecipe[c]; ok || contains(names, c) {
+					skip = c
+				}
+			}
+		}
+		if skip != "" {
+			t.system = append(t.system, ui.Pair{Item: r.Name + " skipped", Reason: skip + " installed (" + member[r.Name] + ")"})
+			continue
+		}
+		kept = append(kept, r)
+	}
+	order = kept
 	for _, r := range order {
 		if !build.Buildable(r) {
 			a.errs.Refuse(r.Name, "kind "+r.Kind+" is not built yet", "")
@@ -469,17 +496,54 @@ func (a *app) notices(rs []*catalog.Recipe, versions map[string]string) {
 	a.out.Blank()
 }
 
-// unfinished refuses to start while an earlier operation's journal exists.
+// unfinished handles an earlier operation that did not finish (8.3): it
+// says so, lets dpkg recover once confirmed, then offers the earlier plan
+// again. exitOK means the current command may go on.
 func (a *app) unfinished() int {
 	j, err := state.Unfinished(state.Dir)
 	if err != nil {
 		a.errs.Fail("journal: "+err.Error(), "unknown", "sudo dpkg --configure -a", "")
 		return exitFailed
 	}
-	if j != nil {
-		a.errs.Fail(fmt.Sprintf("an earlier %s did not finish (%s)", j.Command, strings.Join(j.Recipes, ", ")),
-			"possibly half-installed", "sudo dpkg --configure -a, then: sudo rm "+state.JournalPath(state.Dir), "")
+	if j == nil {
+		return exitOK
+	}
+	what := j.Command + " " + strings.Join(j.Recipes, " ")
+	a.out.Rule(ui.Yellow, "Unfinished")
+	a.out.KV("Operation", "dovy "+what+", started "+j.Started.Local().Format("2006-01-02 15:04"))
+	a.out.KV("Recovery", "sudo dpkg --configure -a, then apt-get -f install, then the plan again")
+	a.out.Blank()
+	if !a.out.Confirm(a.in) {
+		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
+		return exitCancelled
+	}
+	stop, err := a.sudo()
+	if err != nil {
+		a.errs.Fail("sudo: "+err.Error(), "possibly half-installed", "dovy "+what, "")
 		return exitFailed
+	}
+	defer stop()
+	if err := a.root("dpkg", "--configure", "-a"); err != nil {
+		a.errs.Fail("dpkg --configure -a: "+err.Error(), "possibly half-installed", "sudo dpkg --configure -a", "")
+		return exitFailed
+	}
+	if err := apt.Run(io.Discard, a.aptLine(nil, nil), append([]string{"install", "-f", "-y"}, apt.Options...)...); err != nil {
+		a.errs.Fail(err.Error(), "possibly half-installed", "sudo apt-get -f install", "")
+		return exitFailed
+	}
+	if err := a.root("rm", "-f", state.JournalPath(state.Dir)); err != nil {
+		a.errs.Fail(err.Error(), "dpkg recovered; journal left", "sudo rm "+state.JournalPath(state.Dir), "")
+		return exitFailed
+	}
+	a.out.Say(ui.Green, "Recovered:", "dpkg is consistent. Planning dovy "+what+" again.")
+	a.out.Blank()
+	switch j.Command {
+	case "install":
+		return a.install(j.Recipes)
+	case "remove":
+		return a.remove(j.Recipes)
+	case "upgrade":
+		return a.upgrade()
 	}
 	return exitOK
 }

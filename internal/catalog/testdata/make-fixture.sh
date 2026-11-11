@@ -573,10 +573,151 @@ vendor google-chrome google-chrome google-chrome-stable
 vendor brave-browser brave brave-browser
 vendor brave-origin brave brave-origin
 vendor badkey microsoft code
+recipe config-pipewire <<'EOF'
+name = "config-pipewire"
+description = "PipeWire audio, playing common sample rates without resampling"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["pipewire-audio"]
+
+[[file]]
+path = "/etc/pipewire/pipewire.conf.d/00-dovy.conf"
+content = """
+# Rates the device may switch to, so 44.1 kHz and 96 kHz audio play
+# untouched instead of being resampled to 48 kHz.
+context.properties = {
+    default.clock.allowed-rates = [ 44100 48000 88200 96000 ]
+}
+"""
+EOF
+recipe power-profiles <<'EOF'
+name = "power-profiles"
+description = "Power profiles (performance, balanced, power saver) for the desktop"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+conflicts = ["tuned-profiles"]
+packages = ["power-profiles-daemon"]
+EOF
+recipe tuned-profiles <<'EOF'
+name = "tuned-profiles"
+description = "Power profiles from tuned, with a desktop performance profile"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+conflicts = ["power-profiles"]
+replaces = ["power-profiles-daemon"]
+packages = ["tuned-ppd"]
+
+# The desktop's Performance profile maps to tuned's throughput-performance,
+# a server profile. This one replaces it with CPU and firmware settings only.
+[[file]]
+path = "/etc/tuned/profiles/throughput-performance/tuned.conf"
+content = """
+[main]
+summary=Desktop performance (dovy): CPU, firmware and SATA links at performance; memory, disk and network as Debian sets them
+
+# Debian's server profile also sets min_perf_pct=100 (every core held at
+# full clock: heat and fan noise), vm.swappiness=10 (works against zram),
+# dirty-page ratios, readahead and somaxconn. They are left out here.
+[cpu]
+governor=performance
+energy_perf_bias=performance
+energy_performance_preference=performance
+boost=1
+
+[acpi]
+platform_profile=performance
+
+[video]
+panel_power_savings=0
+
+# SATA links at full power: no wake-up delay on SATA disks (NVMe is not
+# affected). Balanced and power saver keep Debian's link power saving.
+[scsi_host]
+alpm=max_performance
+"""
+EOF
+recipe archivers <<'EOF'
+name = "archivers"
+description = "Archive tools: 7z, RAR, zip and zstd"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+requires = ["components"]
+packages = ["7zip", "7zip-rar", "zip", "unzip", "zstd"]
+EOF
+recipe config-bash <<'EOF'
+name = "config-bash"
+description = "Bash defaults: larger history, completion"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["bash-completion"]
+user-notes = "grep -qxF '[ -r /etc/dovy/bashrc.d/00-dovy.sh ] && . /etc/dovy/bashrc.d/00-dovy.sh' ~/.bashrc || echo '[ -r /etc/dovy/bashrc.d/00-dovy.sh ] && . /etc/dovy/bashrc.d/00-dovy.sh' >> ~/.bashrc"
+
+[[file]]
+path = "/etc/dovy/bashrc.d/00-dovy.sh"
+content = """
+# History: larger, without duplicates, appended rather than overwritten,
+# and written after every command so no terminal loses it.
+HISTSIZE=10000
+HISTFILESIZE=20000
+HISTCONTROL=ignoreboth:erasedups
+shopt -s histappend
+PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+# Line wrapping follows window resizes.
+shopt -s checkwinsize
+"""
+EOF
+recipe dovy-defaults <<'EOF'
+name = "dovy-defaults"
+description = "System baseline: kernel, firmware and Mesa from backports, zram, audio, power, tools"
+kind = "bundle"
+version = "1"
+maintainer = "test"
+debian = [13]
+members = ["kernel-backports", "firmware-backports", "mesa-backports", "zram", "config-pipewire", "power-profiles", "archivers", "cli-tools", "config-bash"]
+EOF
 commit "install recipes"
 T5=catalog-2026.04.10.1
 tag trusted $T5
-bundle install $T5
+bundle install-old $T5
+
+# T6, for upgrade: zram 2 (content changed), pfetch dropped (orphaned),
+# cli-tools succeeded by cli-tools-next, and a new dovy-defaults member.
+sed -i 's/^version = "1"$/version = "2"/; s/min(ram \/ 2, 8192)/min(ram \/ 2, 16384)/' "$tmp/repo/recipes/zram/recipe.toml"
+g rm -q -r recipes/pfetch
+echo 'successor = "cli-tools-next"' >>"$tmp/repo/recipes/cli-tools/recipe.toml"
+recipe cli-tools-next <<'EOF'
+name = "cli-tools-next"
+description = "Command-line search and viewing tools, with eza"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["ripgrep", "fd-find", "bat", "eza"]
+EOF
+recipe emoji <<'EOF'
+name = "emoji"
+description = "Colour emoji font"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["fonts-noto-color-emoji"]
+EOF
+sed -i 's/^version = "1"$/version = "2"/; s/"config-bash"\]/"config-bash", "emoji"]/' "$tmp/repo/recipes/dovy-defaults/recipe.toml"
+commit "upgrade test release"
+T6=catalog-2026.04.11.1
+tag trusted $T6
+bundle install $T5 $T6
 
 rm -f "$out/catalog.bundle"
-echo "wrote $out/catalog-{v1,v2,mixed,bad,install}.bundle and $out/allowed_signers"
+echo "wrote $out/catalog-{v1,v2,mixed,bad,install-old,install}.bundle and $out/allowed_signers"

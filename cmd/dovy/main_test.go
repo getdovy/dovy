@@ -48,7 +48,7 @@ func TestRun(t *testing.T) {
 		{"list", 0, exitRefused, "dovy runs as root"},
 		{"install steam", 1000, exitFailed, "no catalog yet"},
 		{"remove steam", 1000, exitFailed, "no catalog yet"},
-		{"check", 1000, exitFailed, "milestone 9"},
+		{"check", 1000, exitFailed, "Problem:"},
 		{"list", 1000, exitFailed, "no catalog yet"},
 	}
 	for _, c := range cases {

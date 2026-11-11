@@ -57,6 +57,7 @@ type txn struct {
 	restored map[string]string                    // replaced packages coming back → mark (ADR 0016)
 	unpinned []string                             // hosts of unpinned repositories (ADR 0017)
 	sbNotes  []ui.Pair                            // Secure Boot notes (1.4)
+	notices  []ui.Pair                            // what needs the user, after the run
 
 	tmp      string
 	actions  []apt.Action
@@ -426,6 +427,15 @@ func (a *app) run(t *txn) int {
 		return code
 	}
 	defer lock.Close()
+	// The release this run used; an older one later is a rollback.
+	if tag, err := catalog.Tag(a.dir); err == nil {
+		if rec := catalog.Recorded(); rec == "" || catalog.Older(rec, tag) {
+			p := filepath.Join(t.tmp, "catalog-release")
+			if os.WriteFile(p, []byte(tag+"\n"), 0o644) == nil {
+				a.root("install", "-m", "644", p, catalog.RecordPath)
+			}
+		}
+	}
 	logf, err := log.Open(t.tmp, time.Now())
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /tmp", "")
@@ -588,7 +598,10 @@ func (a *app) run(t *txn) int {
 		return code
 	}
 	if err := apt.Run(logf, a.aptLine(versions, &t.warnings), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...); err != nil {
-		return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
+		return fail(err.Error(), "unknown: the operation stopped during apt", "run dovy again: it offers to recover")
+	}
+	if apt.Interrupted() {
+		return fail("stopped after the apt transaction (Ctrl-C)", "apt transaction complete; later steps not run", "run dovy again: it finishes the plan")
 	}
 
 	// i386 packages, then dovy-i386, whose postrm removes the architecture
@@ -693,9 +706,10 @@ func (a *app) run(t *txn) int {
 		fmt.Fprintln(a.out.Out, "  "+t.leftover)
 		a.out.Blank()
 	}
-	verb := "installed"
-	if t.verb == "remove" {
-		verb = "removed"
+	a.showNotices(t.notices)
+	verb := map[string]string{"install": "installed", "remove": "removed", "upgrade": "upgraded"}[t.verb]
+	if len(t.names) == 0 {
+		t.names = []string{"Debian packages"}
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Done.")+" "+strings.Join(t.names, ", ")+" "+verb+".")
 	return exitOK
