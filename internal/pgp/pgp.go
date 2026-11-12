@@ -148,16 +148,24 @@ func pad(b []byte, from, n int) []byte {
 	return out
 }
 
-// dearmor returns the binary data of an ASCII-armored block.
+// dearmor returns the binary data of the ASCII-armored blocks, in order.
 func dearmor(s string) ([]byte, error) {
-	lines := strings.Split(strings.ReplaceAll(s, "\r", ""), "\n")
+	var out []byte
 	var b strings.Builder
 	in, body := false, false
-	for _, l := range lines {
+	for _, l := range strings.Split(strings.ReplaceAll(s, "\r", ""), "\n") {
 		switch {
 		case strings.HasPrefix(l, "-----BEGIN PGP PUBLIC KEY BLOCK-----"):
-			in = true
+			in, body = true, false
+			b.Reset()
 		case strings.HasPrefix(l, "-----END PGP PUBLIC KEY BLOCK-----"):
+			if in { // each block is padded on its own
+				bin, err := base64.StdEncoding.DecodeString(b.String())
+				if err != nil {
+					return nil, fmt.Errorf("armored key: %w", err)
+				}
+				out = append(out, bin...)
+			}
 			in = false
 		case !in:
 		case !body: // armor headers end at the first blank line
@@ -169,9 +177,8 @@ func dearmor(s string) ([]byte, error) {
 			b.WriteString(strings.TrimSpace(l))
 		}
 	}
-	out, err := base64.StdEncoding.DecodeString(b.String())
-	if err != nil {
-		return nil, fmt.Errorf("armored key: %w", err)
+	if in {
+		return nil, errors.New("armored key: no END line")
 	}
 	return out, nil
 }

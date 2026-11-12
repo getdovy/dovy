@@ -60,3 +60,21 @@ func TestRefuses(t *testing.T) {
 		t.Error("text accepted")
 	}
 }
+
+// Two armored blocks in one file: both keys, as in the two files.
+func TestTwoBlocks(t *testing.T) {
+	moz, _ := os.ReadFile("testdata/mozilla.asc")
+	goog, _ := os.ReadFile("testdata/google.asc")
+	a, _ := Read(moz)
+	b, _ := Read(goog)
+	both, err := Read(append(append(moz, '\n'), goog...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(append([]string{}, a.Fingerprints...), b.Fingerprints...); strings.Join(both.Fingerprints, " ") != strings.Join(want, " ") {
+		t.Errorf("got %v, want %v", both.Fingerprints, want)
+	}
+	if _, err := Read(moz[:len(moz)/2]); err == nil {
+		t.Error("unterminated block accepted")
+	}
+}
