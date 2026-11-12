@@ -199,9 +199,9 @@ func Load(dir string, debian DebianHas) (map[string]*Recipe, error) {
 			switch r.Repo = repos[r.Repository]; {
 			case r.Repo == nil:
 				errs = append(errs, fmt.Errorf("%s: no repository %q", name, r.Repository))
-			case r.Repo.Repack && len(r.Packages) != 1:
-				errs = append(errs, fmt.Errorf("%s: a repacked repository's recipe names one package, its own", name))
-			case r.Repo.Repack && r.Packages[0] != r.Name:
+			case r.Repo.Repack && len(r.Packages) == 0:
+				errs = append(errs, fmt.Errorf("%s: a repacked repository's recipe names its own package first", name))
+			case r.Repo.Repack && r.Packages[0] != r.Name: // any after it: Debian packages it needs
 				errs = append(errs, fmt.Errorf("%s: repacked package %q must be the recipe's name", name, r.Packages[0]))
 			case !r.Repo.Repack && len(r.Scripts) > 0:
 				errs = append(errs, fmt.Errorf("%s: scripts: only for a repacked repository (ADR 0014)", name))

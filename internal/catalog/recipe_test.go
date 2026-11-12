@@ -182,6 +182,11 @@ func TestVendorRepository(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// A repacked recipe may add Debian packages after its own.
+	more := strings.Replace(recipe("a", "op"), `packages = ["a"]`, `packages = ["a", "libnss3"]`, 1)
+	if _, err := load(map[string]string{"a": more}, map[string]string{"op": repo("op", "https://deb.opera.com/x/", "repack = true\n")}); err != nil {
+		t.Errorf("repack with libraries: %v", err)
+	}
 }
 
 func TestSourceKinds(t *testing.T) {
