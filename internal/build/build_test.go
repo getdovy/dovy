@@ -138,11 +138,15 @@ func TestVendor(t *testing.T) {
 	os.MkdirAll(filepath.Join(cache, "sources"), 0o755)
 	os.WriteFile(filepath.Join(cache, "sources", hex.EncodeToString(h[:])), b, 0o644) // cached: no network
 	r := &catalog.Recipe{Name: "discord", Kind: catalog.UpstreamBinary, Version: "1.0.168",
-		Sources: []catalog.Source{{URL: "https://example.org/discord.deb", SHA256: hex.EncodeToString(h[:])}},
-		Scripts: map[string]string{"postinst": "#!/bin/sh\nupdate-desktop-database -q || true\n", "prerm": ""}}
+		Sources:  []catalog.Source{{URL: "https://example.org/discord.deb", SHA256: hex.EncodeToString(h[:])}},
+		Scripts:  map[string]string{"postinst": "#!/bin/sh\nupdate-desktop-database -q || true\n", "prerm": ""},
+		Packages: []string{"libasound2t64"}}
 	d, err := Recipe(r, 13, cache)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if dep, _ := exec.Command("dpkg-deb", "-f", d, "Depends").Output(); strings.TrimSpace(string(dep)) != "libasound2t64" {
+		t.Errorf("Depends: %s", dep)
 	}
 	f, _ := exec.Command("dpkg-deb", "-f", d, "Version", "X-Dovy-Recipe").Output()
 	if string(f) != "Version: 1.0.168-1~dovy13\nX-Dovy-Recipe: discord\n" {
@@ -186,11 +190,14 @@ Files:
 
 func TestMerge(t *testing.T) {
 	c := "Package: firefox\nConflicts: foo\nVersion: 1\n"
-	if got := merge(c, "Conflicts", []string{"firefox-esr"}); !strings.Contains(got, "Conflicts: foo, firefox-esr\n") {
+	if got := merge(c, "Conflicts", []string{"firefox-esr"}); !strings.Contains(got, "Conflicts: firefox-esr, foo\n") {
 		t.Errorf("got %q", got)
 	}
 	if got := merge("Package: x\n", "Conflicts", []string{"y"}); got != "Package: x\nConflicts: y\n" {
 		t.Errorf("got %q", got)
+	}
+	if got := merge("Depends: a,\n b\n", "Depends", []string{"x"}); got != "Depends: x, a,\n b\n" {
+		t.Errorf("folded field: got %q", got)
 	}
 	if got := merge(c, "Conflicts", nil); got != c {
 		t.Errorf("got %q", got)
@@ -293,5 +300,23 @@ func TestTidyConffiles(t *testing.T) {
 		if want == "" && !errors.Is(err, os.ErrNotExist) || want != "" && string(got) != want {
 			t.Errorf("%q: got %q, %v", in, got, err)
 		}
+	}
+}
+
+// A repacked repository's recipe: packages after its own go to Depends.
+func TestRepackDepends(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	cache := t.TempDir()
+	src := fakeDeb(t, cache, "mullvad-vpn")
+	r := &catalog.Recipe{Name: "mullvad-vpn", Kind: catalog.VendorRepository, Version: "2026.5",
+		Repo: &catalog.Repository{Name: "mullvad", Repack: true}, Packages: []string{"mullvad-vpn", "libnss3", "libgbm1"}}
+	d, err := Repack(r, filepath.Join(cache, "sources", src.SHA256), "2026.5-1~dovy13", cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dep, _ := exec.Command("dpkg-deb", "-f", d, "Depends").Output(); strings.TrimSpace(string(dep)) != "libnss3, libgbm1" {
+		t.Errorf("Depends: %s", dep)
 	}
 }

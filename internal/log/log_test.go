@@ -17,7 +17,12 @@ func TestOpen(t *testing.T) {
 	if want := filepath.Join(dir, "2026-11-05T18:02:11.log"); f.Name() != want {
 		t.Errorf("got %s, want %s", f.Name(), want)
 	}
-	if _, err := Open(dir, now); err == nil {
-		t.Error("a second log with the same name overwrote the first")
+	g, err := Open(dir, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Close()
+	if want := filepath.Join(dir, "2026-11-05T18:02:11-2.log"); g.Name() != want {
+		t.Errorf("second log: got %s, want %s", g.Name(), want)
 	}
 }

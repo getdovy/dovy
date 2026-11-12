@@ -3,10 +3,13 @@
 package fetch
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,8 +17,63 @@ import (
 	"time"
 )
 
-// Client is used for downloads; tests replace it.
-var Client = &http.Client{Timeout: 30 * time.Minute}
+// Stall is how long a download may go without a byte.
+var Stall = time.Minute
+
+// Client is used for downloads; tests replace it. No overall timeout: a
+// large file on a slow line is fine, a stalled one is not (see Stall).
+var Client = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: time.Minute,
+		ForceAttemptHTTP2:     true,
+	},
+	CheckRedirect: httpsOnly,
+}
+
+// httpsOnly refuses a redirect that leaves HTTPS.
+func httpsOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirect to %s: https only", req.URL.Redacted())
+	}
+	if len(via) >= 10 {
+		return errors.New("too many redirects")
+	}
+	return nil
+}
+
+// get starts a GET that is cancelled when no byte arrives for Stall.
+func get(url string) (*http.Response, io.Reader, func(), error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	resp, err := Client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	t := time.AfterFunc(Stall, cancel)
+	body := readerFunc(func(p []byte) (int, error) {
+		n, err := resp.Body.Read(p)
+		if n > 0 {
+			t.Reset(Stall)
+		}
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("no data for %s", Stall)
+		}
+		return n, err
+	})
+	return resp, body, func() { t.Stop(); cancel(); resp.Body.Close() }, nil
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
 // Get returns the path of url's file in dir, named by its sha256.
 // A cached file is used when its hash matches; a mismatch removes the file.
@@ -30,11 +88,11 @@ func Get(url, sum, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	resp, err := Client.Get(url)
+	resp, body, done, err := get(url)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer done()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: %s", url, resp.Status)
 	}
@@ -44,7 +102,7 @@ func Get(url, sum, dir string) (string, error) {
 	}
 	defer os.Remove(f.Name())
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(f, h), resp.Body)
+	_, err = io.Copy(io.MultiWriter(f, h), body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -70,9 +128,15 @@ func hashOf(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Size asks the server for url's size; -1 when it does not say.
+// Size asks the server for url's size; -1 when it does not say in time.
 func Size(url string) int64 {
-	resp, err := Client.Head(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return -1
+	}
+	resp, err := Client.Do(req)
 	if err != nil {
 		return -1
 	}
@@ -89,15 +153,15 @@ func Bytes(url string, limit int64) ([]byte, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("%s: https only", url)
 	}
-	resp, err := Client.Get(url)
+	resp, body, done, err := get(url)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer done()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	b, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err == nil && int64(len(b)) > limit {
 		err = fmt.Errorf("%s: larger than %d bytes", url, limit)
 	}

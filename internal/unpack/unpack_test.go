@@ -79,6 +79,16 @@ func TestTarGzRefuses(t *testing.T) {
 	if err == nil {
 		t.Error("write through link accepted")
 	}
+	// Nor under one: x/up is the root, so x/up/out would point above it.
+	root := filepath.Join(t.TempDir(), "root")
+	err = TarGz(archive(t, entry{"x/up", "..", tar.TypeSymlink, 0o777}, entry{"x/up/out", "..", tar.TypeSymlink, 0o777},
+		entry{"x/up/out/escaped", "", tar.TypeReg, 0o644}), root)
+	if err == nil || !strings.Contains(err.Error(), "through a link") {
+		t.Errorf("path through links: %v", err)
+	}
+	if _, e := os.Stat(filepath.Join(filepath.Dir(root), "escaped")); e == nil {
+		t.Error("file written outside the destination")
+	}
 	if err := TarGz(archive(t), dest); err != nil {
 		t.Errorf("empty: %v", err)
 	}

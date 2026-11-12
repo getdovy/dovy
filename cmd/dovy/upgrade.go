@@ -50,6 +50,7 @@ func (a *app) upgrade() int {
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
+	track(tmp)
 	t.tmp = tmp
 	cache, err := build.CacheDir()
 	if err != nil {

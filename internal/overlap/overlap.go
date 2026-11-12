@@ -54,21 +54,32 @@ func Read(path string) (*Deb, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	d.Files, err = list(r)
+	if err != nil {
+		cmd.Wait()
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return d, cmd.Wait()
+}
+
+// list reads the file names of a tar archive and drains r: the writer still
+// has padding to send after the end marker, and blocks on a small pipe.
+func list(r io.Reader) ([]string, error) {
+	defer io.Copy(io.Discard, r)
+	var files []string
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			break
+			return files, nil
 		}
 		if err != nil {
-			cmd.Wait()
-			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+			return nil, err
 		}
 		if h.Typeflag != tar.TypeDir {
-			d.Files = append(d.Files, "/"+strings.TrimPrefix(filepath.Clean("/"+h.Name), "/"))
+			files = append(files, "/"+strings.TrimPrefix(filepath.Clean("/"+h.Name), "/"))
 		}
 	}
-	return d, cmd.Wait()
 }
 
 // names reads package names from a relation field, without versions.

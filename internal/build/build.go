@@ -184,6 +184,13 @@ func repack(r *catalog.Recipe, p, want, version, cache, work string) (string, er
 		return "", fmt.Errorf("%s: %w", r.Name, err)
 	}
 	if want != "" {
+		// What the vendor's Depends miss, the recipe's packages add.
+		switch {
+		case IsDeb(r):
+			fields = merge(fields, "Depends", r.Packages)
+		case r.Repo != nil && r.Repo.Repack && len(r.Packages) > 1: // the first is its own
+			fields = merge(fields, "Depends", r.Packages[1:])
+		}
 		fields = merge(fields, "Conflicts", deb.Conflicts(r)) + deb.ReplacedField(r)
 	}
 	if r.Release != "" {
@@ -317,7 +324,13 @@ func merge(control, name string, names []string) string {
 	done := false
 	for _, l := range strings.Split(strings.TrimRight(control, "\n"), "\n") {
 		if v, ok := strings.CutPrefix(l, name+":"); ok {
-			l = name + ": " + strings.Join(append([]string{strings.TrimSpace(v)}, names...), ", ")
+			// In front: the field may go on over the next lines.
+			l = name + ": " + strings.Join(names, ", ")
+			if v = strings.TrimSpace(v); v != "" {
+				l += ", " + v
+			} else {
+				l += ","
+			}
 			done = true
 		}
 		b.WriteString(l + "\n")

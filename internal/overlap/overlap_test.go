@@ -1,6 +1,8 @@
 package overlap
 
 import (
+	"archive/tar"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,5 +58,21 @@ func TestDiversions(t *testing.T) {
 	}
 	if c := Check(ff, nil, map[string]bool{"firefox-esr": true}, d); len(c) != 0 {
 		t.Errorf("leaving: %v", c)
+	}
+}
+
+func TestListDrains(t *testing.T) {
+	var b bytes.Buffer
+	w := tar.NewWriter(&b)
+	w.WriteHeader(&tar.Header{Name: "./usr/bin/x", Mode: 0o755, Typeflag: tar.TypeReg})
+	w.WriteHeader(&tar.Header{Name: "./usr/", Typeflag: tar.TypeDir})
+	w.Close()
+	b.Write(make([]byte, 64<<10)) // padding after the end marker
+	files, err := list(&b)
+	if err != nil || len(files) != 1 || files[0] != "/usr/bin/x" {
+		t.Fatalf("got %v, %v", files, err)
+	}
+	if b.Len() != 0 {
+		t.Errorf("%d bytes left unread: the writer would block", b.Len())
 	}
 }

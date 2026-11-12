@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGet(t *testing.T) {
@@ -53,5 +54,34 @@ func TestGet(t *testing.T) {
 	}
 	if _, err := Get("http://example.org/f", sum, dir); err == nil {
 		t.Error("http accepted")
+	}
+}
+
+func TestStall(t *testing.T) {
+	stop := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("start"))
+		w.(http.Flusher).Flush()
+		<-stop
+	}))
+	defer srv.Close()
+	defer close(stop)
+	Client = srv.Client()
+	defer func(d time.Duration) { Stall = d }(Stall)
+	Stall = 100 * time.Millisecond
+	dir := t.TempDir()
+	if _, err := Get(srv.URL+"/f", strings.Repeat("0", 64), dir); err == nil || !strings.Contains(err.Error(), "no data") {
+		t.Errorf("got %v", err)
+	}
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Errorf("leftovers: %v", left)
+	}
+}
+
+func TestRedirect(t *testing.T) {
+	plain, _ := http.NewRequest("GET", "http://example.org/f", nil)
+	tls, _ := http.NewRequest("GET", "https://example.org/f", nil)
+	if httpsOnly(plain, nil) == nil || httpsOnly(tls, nil) != nil || httpsOnly(tls, make([]*http.Request, 10)) == nil {
+		t.Error("redirect policy")
 	}
 }

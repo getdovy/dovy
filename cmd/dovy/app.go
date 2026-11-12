@@ -338,6 +338,7 @@ func (a *app) diff(r *catalog.Recipe) int {
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
+	track(tmp)
 	old := filepath.Join(tmp, "catalog")
 	if err := catalog.Fetch(old, a.url, was, a.signers); err != nil {
 		a.errs.Fail("release "+was+": "+err.Error(), "unchanged", "check the network, then: dovy show "+r.Name+" --diff", "")

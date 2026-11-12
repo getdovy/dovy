@@ -52,9 +52,11 @@ func (b *Box) baseID() string {
 // Base makes the base once: mmdebstrap writes a tarball, unpacked inside
 // the namespace so file owners match every later step.
 func (b *Box) Base() error {
-	if b.baseID() != "" {
+	// A base without umount predates the detached host root: made again.
+	if _, err := os.Stat(filepath.Join(b.base(), "usr/bin/umount")); b.baseID() != "" && err == nil {
 		return nil
 	}
+	os.Remove(filepath.Join(b.Dir, "base.id"))
 	if err := os.MkdirAll(b.Dir, 0o755); err != nil {
 		return err
 	}
@@ -66,7 +68,7 @@ func (b *Box) Base() error {
 	mirror := "https://deb.debian.org/debian"
 	c := b.Codename
 	args := []string{"--mode=unshare", "--variant=buildd", "--format=tar", "--components=main",
-		"--include=ca-certificates",
+		"--include=ca-certificates,mount",
 		`--aptopt=APT::Install-Recommends "false"`, `--aptopt=Acquire::Languages "none"`,
 		c, tar,
 		"deb " + mirror + " " + c + " main",
@@ -129,8 +131,10 @@ func (b *Box) Run(layer, work, script string, network bool) error {
 	return b.run(lower, tmp, work, script, network)
 }
 
-// run mounts an overlay of lower with upper dir/up, then runs script as
-// root in a chroot with work at /build. The host's files are not visible.
+// run mounts an overlay of lower with upper dir/up, makes it the root
+// (pivot_root; root can leave a chroot) and detaches the host's, then runs
+// script as root with work at /build. The host's files are not visible.
+// Tools are named by path: a user's PATH has no sbin.
 func (b *Box) run(lower, dir, work, script string, network bool) error {
 	for _, d := range []string{filepath.Join(dir, "up"), filepath.Join(dir, "wk"), filepath.Join(dir, "root"), b.archives()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -149,7 +153,7 @@ func (b *Box) run(lower, dir, work, script string, network bool) error {
 	return err
 }
 
-// setup builds the chroot: overlay, /proc, a minimal /dev, /tmp, apt's
+// setup builds the root: overlay, /proc, a minimal /dev, /tmp, apt's
 // download cache and /build; then runs the script with a clean environment.
 const setup = `set -e
 lower=$1 dir=$2 work=$3 archives=$4 script=$5
@@ -169,8 +173,11 @@ mount --bind "$archives" "$root/var/cache/apt/archives"
 mkdir -p "$root/build"
 mount --bind "$work" "$root/build"
 cp -L /etc/resolv.conf "$root/etc/resolv.conf" 2>/dev/null || true
-exec chroot "$root" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/build/home LANG=C.UTF-8 \
-	DEBIAN_FRONTEND=noninteractive sh -ec "mkdir -p /build/home; $script"
+cd "$root"
+mkdir -p .host
+/usr/sbin/pivot_root . .host
+exec /usr/sbin/chroot . /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/build/home LANG=C.UTF-8 \
+	DEBIAN_FRONTEND=noninteractive sh -ec "umount -l /.host; rmdir /.host; mkdir -p /build/home; $script"
 `
 
 func (b *Box) cmd(name string, args ...string) error {

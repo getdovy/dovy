@@ -68,7 +68,13 @@ func NoLongerRequired(out string) []string {
 	return names
 }
 
-var interrupted atomic.Bool
+var (
+	interrupted atomic.Bool
+	running     atomic.Int32
+)
+
+// Running reports whether an apt-get started by Run is still going.
+func Running() bool { return running.Load() > 0 }
 
 // Interrupted reports a Ctrl-C during an apt transaction.
 func Interrupted() bool { return interrupted.Load() }
@@ -140,6 +146,11 @@ func ParseStatus(l string) (s Status, ok bool) {
 	if len(f) != 4 || (f[0] != "pmstatus" && f[0] != "dlstatus" && f[0] != "pmerror" && f[0] != "pmconffile") {
 		return s, false
 	}
+	if _, err := strconv.ParseFloat(f[2], 64); err != nil { // pkg:arch:pct:text
+		if g := strings.SplitN(f[3], ":", 2); len(g) == 2 {
+			f[1], f[3] = f[1]+":"+f[2], g[1]
+		}
+	}
 	if f[0] == "pmerror" {
 		return Status{"Error:", f[1] + ": " + f[3]}, true
 	}
@@ -155,7 +166,10 @@ func ParseStatus(l string) (s Status, ok bool) {
 	}
 	for _, v := range verbs {
 		if rest, found := strings.CutPrefix(f[3], v.prefix); found {
-			name, _, _ := strings.Cut(rest, " ")
+			name, arch, _ := strings.Cut(rest, " ")
+			if arch == "(i386)" && !strings.Contains(name, ":") { // as apt-get -s names it
+				name += ":i386"
+			}
 			return Status{v.verb, name}, true
 		}
 	}
@@ -179,6 +193,26 @@ func Chatter(l string) bool {
 	}
 	for _, c := range chatter {
 		if strings.HasPrefix(l, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// forced is what apt and dpkg print when the plan purges i386 copies of
+// protected libraries (4.8); the plan already lists them.
+var forced = []string{
+	"WARNING: The following essential packages will be removed.",
+	"This should NOT be done unless you know exactly what you are doing!",
+	"dpkg: warning: overriding problem because --force enabled:",
+	"dpkg: warning: this is a protected package; it should not be removed",
+}
+
+// Forced reports whether l is one of those lines.
+func Forced(l string) bool {
+	l = strings.TrimSpace(l)
+	for _, f := range forced {
+		if l == f {
 			return true
 		}
 	}
@@ -260,6 +294,8 @@ func Run(log io.Writer, fn func(string), args ...string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	defer signal.Stop(sig)
+	running.Add(1)
+	defer running.Add(-1)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
