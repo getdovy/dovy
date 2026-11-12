@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,11 +53,14 @@ func Update(dir string, debs, remove []string, root Root) error {
 
 	final := map[string]string{} // package → path
 	var old []string
+	known := indexed(dir) // path → stanza, for files unchanged since
 	present, _ := filepath.Glob(filepath.Join(dir, "*.deb"))
 	for _, p := range present {
-		name, err := field(p, "Package")
-		if err != nil {
-			return err
+		name := stanzaField(known[p], "Package")
+		if name == "" {
+			if name, err = field(p, "Package"); err != nil {
+				return err
+			}
 		}
 		final[name] = p
 	}
@@ -79,9 +83,11 @@ func Update(dir string, debs, remove []string, root Root) error {
 
 	var packages strings.Builder
 	for _, name := range sortedKeys(final) {
-		s, err := stanza(final[name])
-		if err != nil {
-			return err
+		s := known[final[name]]
+		if s == "" {
+			if s, err = stanza(final[name]); err != nil {
+				return err
+			}
 		}
 		packages.WriteString(s + "\n")
 	}
@@ -155,12 +161,47 @@ func field(deb, name string) (string, error) {
 }
 
 func hashFile(p string) (string, int64, error) {
-	b, err := os.ReadFile(p)
+	f, err := os.Open(p)
 	if err != nil {
 		return "", 0, err
 	}
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:]), int64(len(b)), nil
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	return hex.EncodeToString(h.Sum(nil)), n, err
+}
+
+// indexed reads dir's Packages: each .deb still there with the size the
+// index records keeps its stanza, so it is not read and hashed again. Only
+// root writes dir (7.3).
+func indexed(dir string) map[string]string {
+	b, err := os.ReadFile(filepath.Join(dir, "Packages"))
+	if err != nil {
+		return nil
+	}
+	m := map[string]string{}
+	for _, st := range strings.Split(string(b), "\n\n") {
+		st = strings.TrimSpace(st)
+		name := strings.TrimPrefix(stanzaField(st, "Filename"), "./")
+		if name == "" || name != filepath.Base(name) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if fi, err := os.Stat(p); err == nil && fmt.Sprint(fi.Size()) == stanzaField(st, "Size") {
+			m[p] = st + "\n"
+		}
+	}
+	return m
+}
+
+// stanzaField is a field's value in a control stanza; "" if absent.
+func stanzaField(st, name string) string {
+	for _, l := range strings.Split(st, "\n") {
+		if v, ok := strings.CutPrefix(l, name+":"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func sortedKeys(m map[string]string) []string {

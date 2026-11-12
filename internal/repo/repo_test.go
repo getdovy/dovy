@@ -32,6 +32,22 @@ func TestPublish(t *testing.T) {
 	if err := Publish(dir, []string{build(t, "pfetch", "3.1.1-1~dovy13"), build(t, "fzf", "0.75.0-1~dovy13")}, Direct); err != nil {
 		t.Fatal(err)
 	}
+	// Unchanged files keep their stanza; a file of another size is read again.
+	first, _ := os.ReadFile(filepath.Join(dir, "Packages"))
+	if k := indexed(dir); len(k) != 2 || !strings.Contains(string(first), k[filepath.Join(dir, "fzf_0.75.0-1~dovy13_amd64.deb")]) {
+		t.Errorf("indexed: %v", k)
+	}
+	if err := Update(dir, nil, nil, Direct); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, "Packages")); string(again) != string(first) {
+		t.Errorf("index changed without a change:\n%s", again)
+	}
+	os.WriteFile(filepath.Join(dir, "stray_1_amd64.deb"), nil, 0o644)
+	if k := indexed(dir); len(k) != 2 {
+		t.Errorf("unlisted file trusted: %v", k)
+	}
+	os.Remove(filepath.Join(dir, "stray_1_amd64.deb"))
 	if err := Publish(dir, []string{build(t, "pfetch", "3.1.1-2~dovy13")}, Direct); err != nil {
 		t.Fatal(err)
 	}
