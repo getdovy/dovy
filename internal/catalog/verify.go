@@ -229,6 +229,9 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 	parent := filepath.Dir(dir)
 	work, old := dir+".new", dir+".old"
 	os.RemoveAll(work)
+	if _, err := os.Stat(dir); err != nil { // an update stopped between its renames
+		os.Rename(old, dir)
+	}
 	os.RemoveAll(old)
 	defer os.RemoveAll(work)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
