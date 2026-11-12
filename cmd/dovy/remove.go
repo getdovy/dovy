@@ -102,6 +102,7 @@ func (a *app) remove(names []string) int {
 		return code
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Catalog signature verified."))
+	go manualPkgs() // ready by the time the plan needs it
 	inst, err := dpkgInstalled()
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
@@ -194,6 +195,7 @@ func (a *app) remove(names []string) int {
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
+	track(tmp)
 	t.tmp = tmp
 
 	// Backports packages that stay installed return to stable (4.6); those
@@ -286,12 +288,7 @@ func sortedKeys(m map[string]string) []string {
 
 // kept lists the recipes' Debian packages that stay, and why (12.2).
 func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[string]pkgInfo, removing map[string]bool) []ui.Pair {
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
-	}
+	manual := manualPkgs()
 	var kept []ui.Pair
 	seen := map[string]bool{}
 	for _, n := range names {
@@ -303,6 +300,13 @@ func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[strin
 			if o := rs[m]; o != nil && !contains(names, m) {
 				if _, ok := inst[o.Package()]; ok {
 					kept = append(kept, ui.Pair{Item: m, Reason: "member of " + n + "; remove it on its own"})
+				}
+			}
+		}
+		for _, d := range r.Depends { // came with it, a recipe of its own
+			if o := rs[d]; o != nil && !contains(names, d) {
+				if _, ok := inst[o.Package()]; ok {
+					kept = append(kept, ui.Pair{Item: d, Reason: "a recipe of its own; remove it on its own"})
 				}
 			}
 		}

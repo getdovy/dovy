@@ -140,6 +140,16 @@ func TestUnused(t *testing.T) {
 	}
 }
 
+// A recipe's own packages are only expected to go; apt is still asked.
+func TestAsked(t *testing.T) {
+	tx := &txn{removing: map[string]string{"dovy-archivers": "purged", "7zip": "with archivers"},
+		request: []string{"dovy-archivers-", "linux-base=4.12.1"}}
+	got := unused(nil, []string{"7zip", "dovy-archivers", "linux-base", "zstd"}, tx.asked())
+	if strings.Join(got, " ") != "7zip zstd" {
+		t.Errorf("got %v", got)
+	}
+}
+
 func TestPkgName(t *testing.T) {
 	for in, want := range map[string]string{"mesa-libgallium/trixie-backports": "mesa-libgallium", "linux-base=4.12.1": "linux-base",
 		"libgl1-mesa-dri:i386-": "libgl1-mesa-dri:i386", "dovy-mesa-": "dovy-mesa"} {

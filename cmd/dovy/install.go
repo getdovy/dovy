@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
@@ -15,6 +16,7 @@ import (
 	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
+	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/sandbox"
 	"github.com/getdovy/dovy/internal/state"
 	"github.com/getdovy/dovy/internal/ui"
@@ -62,6 +64,7 @@ func (a *app) install(names []string) int {
 		return code
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Catalog signature verified."))
+	go manualPkgs() // ready by the time the plan needs it
 	order, missing := resolve(rs, names)
 	if missing != "" {
 		a.errs.Fail("no recipe "+missing, "unchanged", "dovy search "+missing, "")
@@ -176,6 +179,7 @@ func (a *app) install(names []string) int {
 		return exitFailed
 	}
 	defer os.RemoveAll(tmp)
+	track(tmp)
 	t.tmp = tmp
 
 	// Capabilities, built from the system's sources (5.1–5.4), and vendor
@@ -275,12 +279,7 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 		r.Replaced = splitList(inst[p].Replaced)
 		return
 	}
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
-	}
+	manual := manualPkgs()
 	for _, p := range r.Replaces {
 		i, ok := inst[p]
 		if !ok || i.Recipe != "" {
@@ -302,18 +301,25 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 // them by a conflict rather than as unused (4.1). Manual ones stay
 // surprises.
 func (t *txn) expectWith(r *catalog.Recipe, inst map[string]pkgInfo) {
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
-	}
+	manual := manualPkgs()
 	for _, p := range r.Packages {
 		if _, ok := inst[p]; ok && !manual[p] && t.removing[p] == "" {
 			t.removing[p] = "with " + r.Name
 		}
 	}
 }
+
+// manualPkgs is the packages marked manual, asked of apt once per run: the
+// plan is made before anything changes.
+var manualPkgs = sync.OnceValue(func() map[string]bool {
+	m := map[string]bool{}
+	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
+		for _, n := range strings.Fields(string(out)) {
+			m[n] = true
+		}
+	}
+	return m
+})
 
 // splitList reads a comma-separated control field.
 func splitList(v string) []string {
@@ -331,12 +337,7 @@ func splitList(v string) []string {
 // stable version (a versioned kernel) or nothing left using them are
 // removed. Packages that other backports recipes still use are skipped.
 func (t *txn) leaveBackports(pinned, others []string, inst map[string]pkgInfo, leaving map[string]bool) {
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
-	}
+	manual := manualPkgs()
 	keep := map[string]bool{}
 	for _, p := range installedDeps(others) {
 		keep[p] = true
@@ -466,7 +467,9 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 			case "Hit":
 				say(ui.Dim, "No Change:", f.Text)
 			case "Ign":
-				say(ui.Dim, "Ignored:", f.Text)
+				if !strings.HasPrefix(f.Text, "file:"+repo.Dir+" ") { // unsigned by design (ADR 0011)
+					say(ui.Dim, "Ignored:", f.Text)
+				}
 			case "Err":
 				say(ui.Red, "Error:", f.Text)
 			}

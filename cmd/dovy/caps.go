@@ -195,17 +195,16 @@ func (t *txn) leaveI386(stubs []string) error {
 	if _, err := os.Stat(capability.I386Added); err != nil {
 		return nil // i386 was there before dovy: it stays (3.6)
 	}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		var own []string
-		for _, n := range strings.Fields(string(out)) {
-			if strings.HasSuffix(n, ":i386") {
-				own = append(own, n)
-			}
+	var own []string
+	for n := range manualPkgs() {
+		if strings.HasSuffix(n, ":i386") {
+			own = append(own, n)
 		}
-		if len(own) > 0 {
-			t.kept = append(t.kept, ui.Pair{Item: "i386 architecture", Reason: strings.Join(own, ", ") + " installed by the user"})
-			return nil
-		}
+	}
+	if len(own) > 0 {
+		sort.Strings(own)
+		t.kept = append(t.kept, ui.Pair{Item: "i386 architecture", Reason: strings.Join(own, ", ") + " installed by the user"})
+		return nil
 	}
 	out, _ := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\t${db:Status-Abbrev}\n").Output()
 	var i386 []string

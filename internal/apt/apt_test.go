@@ -77,6 +77,9 @@ func TestStatus(t *testing.T) {
 		"pmstatus:man-db:90.0:Running post-installation trigger man-db": {"Processing:", "man-db"},
 		"pmstatus:bat:10.0:Removing bat (amd64)":                        {"Removing:", "bat"},
 		"pmerror:bat:10.0:subprocess failed":                            {"Error:", "bat: subprocess failed"},
+		"pmstatus:libzstd1:50.0:Removing libzstd1 (i386)":               {"Removing:", "libzstd1:i386"},
+		"pmstatus:libzstd1:i386:50.0:Removing libzstd1:i386 (i386)":     {"Removing:", "libzstd1:i386"},
+		"pmstatus:libzstd1:50.0:Completely removing libzstd1 (i386)":    {"Purging:", "libzstd1:i386"},
 	}
 	for l, want := range cases {
 		if s, _ := ParseStatus(l); s != want {
@@ -85,6 +88,9 @@ func TestStatus(t *testing.T) {
 	}
 	if _, ok := ParseStatus("Setting up bat (0.25.0-2+b2) ..."); ok {
 		t.Error("dpkg text read as status")
+	}
+	if !Forced("    dpkg: warning: this is a protected package; it should not be removed") || Forced("dpkg: warning: other") {
+		t.Error("forced lines")
 	}
 	if Chatter("Created symlink /etc/systemd/system/x.service.") {
 		t.Error("maintainer script output hidden")

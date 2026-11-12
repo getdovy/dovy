@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/getdovy/dovy/internal/build"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/state"
@@ -55,11 +56,33 @@ func (a *app) check() int {
 		}
 	}
 	sort.Strings(ours)
+	// A vendor's package runs the vendor's scripts (2.6), which may rewrite
+	// its files: reported, not a problem.
+	var vendor []string
+	for _, p := range ours {
+		if r := rs[inst[p].Recipe]; r != nil && (build.IsDeb(r) || r.Repo != nil && r.Repo.Repack) {
+			vendor = append(vendor, p)
+		}
+	}
 	altered, edited := verify(ours)
-	if len(altered) > 0 {
-		bad("dovy's files changed by hand: "+strings.Join(altered, ", "), "reinstall the recipe: dovy remove <recipe>, then dovy install <recipe>")
+	theirs, _ := verify(vendor)
+	changed := map[string]bool{}
+	for _, f := range theirs {
+		changed[f] = true
+	}
+	var byHand []string
+	for _, f := range altered {
+		if !changed[f] {
+			byHand = append(byHand, f)
+		}
+	}
+	if len(byHand) > 0 {
+		bad("dovy's files changed by hand: "+brief(byHand), "reinstall the recipe: dovy remove <recipe>, then dovy install <recipe>")
 	} else {
 		ok(fmt.Sprintf("files of %d dovy packages as installed", len(ours)))
+	}
+	if len(theirs) > 0 {
+		a.out.Say(ui.Dim, "Note:", fmt.Sprintf("%d files changed by vendor packages' own scripts: %s", len(theirs), brief(theirs)))
 	}
 	if len(edited) > 0 {
 		a.out.Say(ui.Dim, "Kept:", "edited config files: "+strings.Join(edited, ", ")+" (8.5)")
@@ -103,6 +126,14 @@ func (a *app) check() int {
 		return exitFailed
 	}
 	return exitOK
+}
+
+// brief lists at most five names, then how many more.
+func brief(s []string) string {
+	if len(s) <= 5 {
+		return strings.Join(s, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(s[:5], ", "), len(s)-5)
 }
 
 // verify runs dpkg --verify: files changed by hand, and edited conffiles

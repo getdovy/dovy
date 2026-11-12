@@ -163,12 +163,7 @@ func (t *txn) platform() {
 			}
 		}
 	}
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
-	}
+	manual := manualPkgs()
 	// What depends on a package NVIDIA replaces or upgrades goes with it
 	// (Debian's exact-version driver libraries), through chains.
 	for _, n := range upgraded {

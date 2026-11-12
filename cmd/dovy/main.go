@@ -3,9 +3,15 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 
+	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
@@ -119,8 +125,42 @@ func show(args []string) string {
 	return ""
 }
 
+// Ctrl-C outside an apt run cancels (8.10): temporary folders go and
+// nothing has changed. During apt, apt.Run answers; while holding, the
+// transaction's last steps finish.
+var (
+	tempMu  sync.Mutex
+	temps   []string
+	holding atomic.Bool
+)
+
+func track(dir string) {
+	tempMu.Lock()
+	temps = append(temps, dir)
+	tempMu.Unlock()
+}
+
+func cancelOnInterrupt(out io.Writer) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		for range sig {
+			if apt.Running() || holding.Load() {
+				continue
+			}
+			tempMu.Lock()
+			for _, d := range temps {
+				os.RemoveAll(d)
+			}
+			fmt.Fprintln(out, "\nCancelled. Nothing changed.")
+			os.Exit(exitCancelled)
+		}
+	}()
+}
+
 func main() {
 	out, errs := ui.New(os.Stdout), ui.New(os.Stderr)
+	cancelOnInterrupt(os.Stdout)
 	a, err := newApp(out, errs)
 	if err != nil {
 		errs.Fail(err.Error(), "unchanged", "set HOME or XDG_DATA_HOME", "")

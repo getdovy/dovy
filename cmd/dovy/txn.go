@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
@@ -118,7 +119,23 @@ func (t *txn) withConfig(c *simConfig) error {
 	if c.i386 {
 		t.opts = append(t.opts, "-o", "APT::Architectures::=amd64", "-o", "APT::Architectures::=i386")
 	}
-	out, err := exec.Command("apt-get", append(append([]string{"-q"}, t.opts...), "update")...).CombinedOutput()
+	// Only what is new is fetched: the system's lists are already there.
+	// A new architecture needs every source again.
+	update := append([]string{"-q"}, t.opts...)
+	if !c.i386 {
+		fresh := filepath.Join(dir, "fresh")
+		if err := os.MkdirAll(fresh, 0o755); err != nil {
+			return err
+		}
+		if err := write(fresh, c.sources); err != nil {
+			return err
+		}
+		if added, _ := os.ReadDir(fresh); len(added) == 0 {
+			return nil
+		}
+		update = append(update, "-o", "Dir::Etc::SourceList=/dev/null", "-o", "Dir::Etc::SourceParts="+fresh, "-o", "APT::Get::List-Cleanup=0")
+	}
+	out, err := exec.Command("apt-get", append(update, "update")...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("apt-get update with dovy's capabilities: %s", strings.TrimSpace(string(out)))
 	}
@@ -130,9 +147,26 @@ func (t *txn) args(stubs []string) []string {
 	return append(append(a, stubs...), t.request...)
 }
 
+// asked is the packages t.request names. A package only expected to go
+// (expectWith) is not among them: apt must still be asked.
+func (t *txn) asked() map[string]bool {
+	m := map[string]bool{}
+	for _, r := range t.request {
+		m[pkgName(r)] = true
+	}
+	return m
+}
+
 // simulate resolves the plan with apt, adding what it leaves unused (4.1).
 func (t *txn) simulate(stubs []string) error {
-	base, err := apt.Simulate(t.opts, "autoremove")
+	var base string
+	var berr error
+	done := make(chan struct{})
+	go func() { base, berr = apt.Simulate(t.opts, "autoremove"); close(done) }() // independent: at once
+	out, err := apt.Simulate(t.opts, t.args(stubs)...)
+	if <-done; err == nil {
+		err = berr
+	}
 	if err != nil {
 		return err
 	}
@@ -140,18 +174,12 @@ func (t *txn) simulate(stubs []string) error {
 	for _, x := range apt.Parse(base) {
 		before = append(before, x.Name)
 	}
-	out, err := apt.Simulate(t.opts, t.args(stubs)...)
-	if err != nil {
-		return err
-	}
-	removing := map[string]bool{}
-	for p := range t.removing {
-		removing[p] = true
-	}
 	t.unused = map[string]bool{}
-	if extra := unused(before, apt.NoLongerRequired(out), removing); len(extra) > 0 {
+	if extra := unused(before, apt.NoLongerRequired(out), t.asked()); len(extra) > 0 {
 		for _, p := range extra {
-			t.unused[p] = true
+			if t.removing[p] == "" { // else the recipe's own package, already noted
+				t.unused[p] = true
+			}
 			t.request = append(t.request, p+"-")
 		}
 		if out, err = apt.Simulate(t.opts, t.args(stubs)...); err != nil {
@@ -279,6 +307,36 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 	return secs, counts, totals
 }
 
+// sourceSizes is each package's download size: all servers asked at once;
+// a file already in the cache answers for itself.
+func sourceSizes(rs []*catalog.Recipe) map[string]int64 {
+	cache, _ := build.CacheDir()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sizes := map[string]int64{}
+	for _, r := range rs {
+		for _, s := range r.Sources {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var n int64
+				if fi, err := os.Stat(filepath.Join(cache, "sources", s.SHA256)); cache != "" && err == nil {
+					n = fi.Size()
+				} else {
+					n = fetch.Size(s.URL)
+				}
+				if n > 0 {
+					mu.Lock()
+					sizes[r.Package()] += n
+					mu.Unlock()
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	return sizes
+}
+
 // same reports whether two simulations do the same, ignoring packages in skip.
 func same(a, b []apt.Action, skip map[string]bool) bool {
 	key := func(as []apt.Action) string {
@@ -298,6 +356,8 @@ func same(a, b []apt.Action, skip map[string]bool) bool {
 func (a *app) run(t *txn) int {
 	what := strings.Join(t.names, " ")
 	again := "dovy " + t.verb + " " + what
+	sized := make(chan map[string]int64, 1)
+	go func() { sized <- sourceSizes(t.build) }() // while apt plans
 
 	// Resolve packages: apt simulates with control-only stubs; a source
 	// build's stub depends on the recipe's packages. A vendor .deb's
@@ -405,14 +465,7 @@ func (a *app) run(t *txn) int {
 			debian[x.Name] = x.Version
 		}
 	}
-	sources := map[string]int64{}
-	for _, r := range t.build {
-		for _, s := range r.Sources {
-			if n := fetch.Size(s.URL); n > 0 {
-				sources[r.Package()] += n
-			}
-		}
-	}
+	sources := <-sized
 	secs, counts, totals := t.sections(apt.Sizes(t.opts, debian), sources)
 	if len(secs) == 0 {
 		fmt.Fprintln(a.out.Out, "Nothing to do.")
@@ -435,6 +488,7 @@ func (a *app) run(t *txn) int {
 		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
 		return exitCancelled
 	}
+	a.out.Blank()
 
 	// sudo once, kept fresh for the run (8.11); one dovy at a time (8.4).
 	stop, err := a.sudo()
@@ -479,11 +533,12 @@ func (a *app) run(t *txn) int {
 		a.errs.Fail(failed, system, next, logPath)
 		return exitFailed
 	}
-	manual := map[string]bool{}
-	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
-		for _, n := range strings.Fields(string(out)) {
-			manual[n] = true
-		}
+	manual := manualPkgs()
+	// apt-mark's own lines go to the log.
+	mark := func(args ...string) error {
+		cmd := exec.Command("sudo", append([]string{"--", "apt-mark"}, args...)...)
+		cmd.Stdout, cmd.Stderr = logf, logf
+		return cmd.Run()
 	}
 
 	// Download (12.3).
@@ -550,7 +605,14 @@ func (a *app) run(t *txn) int {
 		}
 	}
 
+	if apt.Interrupted() { // Ctrl-C during the download (8.10)
+		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
+		return exitCancelled
+	}
+
 	// Journal, capabilities, apt update, one transaction (8.3).
+	holding.Store(true)
+	defer holding.Store(false)
 	a.out.Rule("", strings.ToUpper(t.verb[:1])+t.verb[1:])
 	j := &state.Journal{Command: t.verb, Recipes: t.names, Started: time.Now().UTC()}
 	for _, x := range t.actions {
@@ -591,7 +653,7 @@ func (a *app) run(t *txn) int {
 			return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
 		}
 		// Capabilities come and go with the recipes that need them (5.1).
-		if err := a.root(append([]string{"apt-mark", "auto"}, names...)...); err != nil {
+		if err := mark(append([]string{"auto"}, names...)...); err != nil {
 			return fail(err.Error(), "capabilities installed", "sudo apt-mark auto "+strings.Join(names, " "))
 		}
 		if err := update(); err != nil {
@@ -634,6 +696,37 @@ func (a *app) run(t *txn) int {
 		return fail("stopped after the apt transaction (Ctrl-C)", "apt transaction complete; later steps not run", "run dovy again: it finishes the plan")
 	}
 
+	// dovy's own packages are purged (4.4), sources before the next apt
+	// update; the repository drops them.
+	var gone []string
+	all := map[string]string{}
+	for p := range t.removing {
+		all[p] = ""
+	}
+	for p := range t.unused {
+		all[p] = ""
+	}
+	for p := range t.down { // dovy's package returned to Debian's version
+		if t.inst[p].Recipe != "" {
+			gone = append(gone, p)
+		}
+	}
+	for _, p := range sortedKeys(all) {
+		i := t.inst[p]
+		if i.Recipe == "" && i.Capability == "" {
+			continue
+		}
+		gone = append(gone, p)
+		if configOnly(p) {
+			cmd := exec.Command("sudo", "--", "dpkg", "--purge", p)
+			cmd.Stdout, cmd.Stderr = logf, logf
+			if err := cmd.Run(); err != nil {
+				return fail(err.Error(), "removed; config of "+p+" left", "sudo dpkg --purge "+p)
+			}
+			a.out.Say(ui.Red, "Purging:", p+" ("+i.Version+")")
+		}
+	}
+
 	// i386 packages, then dovy-i386, whose postrm removes the architecture
 	// once none is left (4.8).
 	if len(t.final) > 0 {
@@ -650,7 +743,13 @@ func (a *app) run(t *txn) int {
 				continue
 			}
 			pargs := append(append([]string{"purge", "-y", "--allow-remove-essential"}, apt.Options...), step...)
-			if err := apt.Run(logf, a.aptLine(versions, &t.warnings), pargs...); err != nil {
+			line := a.aptLine(versions, &t.warnings)
+			quiet := func(l string) {
+				if !apt.Forced(l) {
+					line(l)
+				}
+			}
+			if err := apt.Run(logf, quiet, pargs...); err != nil {
 				return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
 			}
 		}
@@ -680,38 +779,11 @@ func (a *app) run(t *txn) int {
 		if len(marks[m]) == 0 {
 			continue
 		}
-		if err := a.root(append([]string{"apt-mark", m}, marks[m]...)...); err != nil {
+		if err := mark(append([]string{m}, marks[m]...)...); err != nil {
 			a.out.Say(ui.Yellow, "Warning:", "could not mark "+strings.Join(marks[m], ", ")+" "+m)
 		}
 	}
 
-	// dovy's own packages are purged (4.4); the repository drops them.
-	var gone []string
-	all := map[string]bool{}
-	for p := range t.removing {
-		all[p] = true
-	}
-	for p := range t.unused {
-		all[p] = true
-	}
-	for p := range t.down { // dovy's package returned to Debian's version
-		if t.inst[p].Recipe != "" {
-			gone = append(gone, p)
-		}
-	}
-	for p := range all {
-		if i := t.inst[p]; (i.Recipe != "" || i.Capability != "") && configOnly(p) {
-			cmd := exec.Command("sudo", "--", "dpkg", "--purge", p)
-			cmd.Stdout, cmd.Stderr = logf, logf
-			if err := cmd.Run(); err != nil {
-				return fail(err.Error(), "removed; config of "+p+" left", "sudo dpkg --purge "+p)
-			}
-			a.out.Say(ui.Red, "Purging:", p+" ("+i.Version+")")
-		}
-		if i := t.inst[p]; i.Recipe != "" || i.Capability != "" {
-			gone = append(gone, p)
-		}
-	}
 	if len(gone) > 0 {
 		if err := repo.Update(repo.Dir, nil, gone, a.root); err != nil {
 			a.out.Say(ui.Yellow, "Warning:", "local repository: "+err.Error())

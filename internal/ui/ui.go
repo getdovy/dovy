@@ -123,6 +123,9 @@ func (u *UI) Refuse(recipe, reason, found string) {
 func (u *UI) Confirm(in io.Reader) bool {
 	fmt.Fprint(u.Out, "Continue? [y/N] ")
 	a, _ := bufio.NewReader(in).ReadString('\n')
+	if f, ok := in.(*os.File); !ok || !isTerminal(f) { // no echoed Enter ends the line
+		fmt.Fprintln(u.Out)
+	}
 	a = strings.ToLower(strings.TrimSpace(a))
 	return a == "y" || a == "yes"
 }
