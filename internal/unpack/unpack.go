@@ -46,6 +46,7 @@ func TarXz(path, dest string) error {
 }
 
 func untar(tr *tar.Reader, dest string) error {
+	links := map[string]bool{} // links made so far, by cleaned name
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -64,6 +65,13 @@ func untar(tr *tar.Reader, dest string) error {
 		if name == "." {
 			continue
 		}
+		// Checked by name only so far: an entry under an earlier link would
+		// be written wherever the links lead.
+		for d := filepath.Dir(name); d != "."; d = filepath.Dir(d) {
+			if links[d] {
+				return fmt.Errorf("%s: path goes through a link", h.Name)
+			}
+		}
 		target := filepath.Join(dest, name)
 		switch h.Typeflag {
 		case tar.TypeDir:
@@ -81,6 +89,7 @@ func untar(tr *tar.Reader, dest string) error {
 			if err = os.MkdirAll(filepath.Dir(target), 0o755); err == nil {
 				err = os.Symlink(h.Linkname, target)
 			}
+			links[name] = true
 		default:
 			return fmt.Errorf("%s: unsupported entry type", h.Name)
 		}
