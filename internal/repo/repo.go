@@ -51,9 +51,9 @@ func Update(dir string, debs, remove []string, root Root) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	final := map[string]string{} // package → path
+	final := map[string]string{} // package -> path
 	var old []string
-	known := indexed(dir) // path → stanza, for files unchanged since
+	known := indexed(dir) // path -> stanza, for files unchanged since
 	present, _ := filepath.Glob(filepath.Join(dir, "*.deb"))
 	for _, p := range present {
 		name := stanzaField(known[p], "Package")

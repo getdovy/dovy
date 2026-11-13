@@ -85,7 +85,7 @@ type Recipe struct {
 
 	Sources       []Source          `toml:"source"`
 	Install       map[string]string `toml:"install"`
-	Links         map[string]string `toml:"links"` // installed link → what it points to
+	Links         map[string]string `toml:"links"` // installed link -> what it points to
 	Scripts       map[string]string `toml:"scripts"`
 	Repository    string            `toml:"repository"`
 	Repo          *Repository       `toml:"-"` // the repository it names
@@ -471,7 +471,7 @@ func crossCheck(rs map[string]*Recipe) []error {
 	visit = func(n string, path []string) {
 		switch state[n] {
 		case 1:
-			errs = append(errs, fmt.Errorf("dependency cycle: %s", strings.Join(append(path, n), " → ")))
+			errs = append(errs, fmt.Errorf("dependency cycle: %s", strings.Join(append(path, n), " -> ")))
 			return
 		case 2:
 			return

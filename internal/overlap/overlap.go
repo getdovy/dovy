@@ -95,7 +95,7 @@ func names(field string) []string {
 	return n
 }
 
-// Owners reads dpkg's file lists in infoDir: path → package.
+// Owners reads dpkg's file lists in infoDir: path -> package.
 func Owners(infoDir string) (map[string]string, error) {
 	lists, err := filepath.Glob(filepath.Join(infoDir, "*.list"))
 	if err != nil {
@@ -117,7 +117,7 @@ func Owners(infoDir string) (map[string]string, error) {
 	return owners, nil
 }
 
-// Diverted reads dpkg's diversions: path → the package holding it, "" for
+// Diverted reads dpkg's diversions: path -> the package holding it, "" for
 // the administrator's own.
 func Diverted() map[string]string {
 	out, _ := exec.Command("dpkg-divert", "--list").Output()

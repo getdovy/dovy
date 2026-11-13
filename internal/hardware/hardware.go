@@ -54,7 +54,7 @@ func Of(gs []GPU, vendor string) []GPU {
 	return out
 }
 
-// Table is NVIDIA's open-module table: device → subsystems ("" for any).
+// Table is NVIDIA's open-module table: device -> subsystems ("" for any).
 type Table map[string][]string
 
 var rowRe = regexp.MustCompile(`^\|[^|]+\|\s*([0-9A-Fa-f]{4})(?:\s+([0-9A-Fa-f]{4})\s+([0-9A-Fa-f]{4}))?\s*\|\s*$`)

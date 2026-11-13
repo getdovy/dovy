@@ -303,7 +303,7 @@ func Fetch(dir, url, tag string, signers []byte) error {
 	return err
 }
 
-// versions reads name → version from the recipes on disk, unchecked.
+// versions reads name -> version from the recipes on disk, unchecked.
 func versions(dir string) map[string]string {
 	v := map[string]string{}
 	paths, _ := filepath.Glob(filepath.Join(dir, "recipes", "*", "recipe.toml"))

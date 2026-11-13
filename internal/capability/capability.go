@@ -25,7 +25,7 @@ const (
 	I386       = "dovy-i386"
 )
 
-// Package names a capability's package: backports → dovy-backports.
+// Package names a capability's package: backports -> dovy-backports.
 func Package(name string) string { return "dovy-" + name }
 
 // nonFree is what the components capability adds when missing (5.3).
