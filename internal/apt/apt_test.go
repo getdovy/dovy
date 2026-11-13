@@ -74,17 +74,26 @@ func TestStatus(t *testing.T) {
 		t.Errorf("got %d: %v", len(tidy), tidy)
 	}
 	cases := map[string]Status{
-		"pmstatus:man-db:90.0:Running post-installation trigger man-db": {"Processing:", "man-db"},
-		"pmstatus:bat:10.0:Removing bat (amd64)":                        {"Removing:", "bat"},
-		"pmerror:bat:10.0:subprocess failed":                            {"Error:", "bat: subprocess failed"},
-		"pmstatus:libzstd1:50.0:Removing libzstd1 (i386)":               {"Removing:", "libzstd1:i386"},
-		"pmstatus:libzstd1:i386:50.0:Removing libzstd1:i386 (i386)":     {"Removing:", "libzstd1:i386"},
-		"pmstatus:libzstd1:50.0:Completely removing libzstd1 (i386)":    {"Purging:", "libzstd1:i386"},
+		"pmstatus:man-db:90.0:Running post-installation trigger man-db": {Verb: "Processing:", Package: "man-db"},
+		"pmstatus:bat:10.0:Removing bat (amd64)":                        {Verb: "Removing:", Package: "bat"},
+		"pmerror:bat:10.0:subprocess failed":                            {Verb: "Error:", Package: "bat: subprocess failed"},
+		"pmstatus:libzstd1:50.0:Removing libzstd1 (i386)":               {Verb: "Removing:", Package: "libzstd1:i386"},
+		"pmstatus:libzstd1:i386:50.0:Removing libzstd1:i386 (i386)":     {Verb: "Removing:", Package: "libzstd1:i386"},
+		"pmstatus:libzstd1:50.0:Completely removing libzstd1 (i386)":    {Verb: "Purging:", Package: "libzstd1:i386"},
 	}
 	for l, want := range cases {
-		if s, _ := ParseStatus(l); s != want {
+		if s, _ := ParseStatus(l); s.Verb != want.Verb || s.Package != want.Package {
 			t.Errorf("%s: got %+v", l, s)
 		}
+	}
+	if s, ok := ParseStatus("dlstatus:3:42.5000:Retrieving file 3 of 12"); !ok || !s.Download || s.Percent != 42.5 || s.Verb != "" {
+		t.Errorf("dlstatus: %+v", s)
+	}
+	if s, _ := ParseStatus("pmstatus:libzstd1:i386:50.0:Removing libzstd1:i386 (i386)"); s.Percent != 50 {
+		t.Errorf("percent: %+v", s)
+	}
+	if s, _ := ParseStatus("pmstatus:dpkg-exec:12.5:Running dpkg"); s.Percent != 12.5 || s.Verb != "" {
+		t.Errorf("no verb: %+v", s)
 	}
 	if _, ok := ParseStatus("Setting up bat (0.25.0-2+b2) ..."); ok {
 		t.Error("dpkg text read as status")

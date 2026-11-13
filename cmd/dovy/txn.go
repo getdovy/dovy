@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,10 +43,10 @@ type txn struct {
 	names    []string          // the recipes asked for
 	release  int               // Debian release, for versions
 	build    []*catalog.Recipe // recipes and capabilities to build, in order
-	versions map[string]string // dovy packages to install → version
+	versions map[string]string // dovy packages to install -> version
 	caps     map[string]bool   // capability packages, installed first (8.3.7)
 	request  []string          // more apt-get install arguments: pkg/suite, pkg=ver, pkg-
-	removing map[string]string // packages the plan removes → note
+	removing map[string]string // packages the plan removes -> note
 	down     map[string]bool   // packages the plan downgrades (4.6)
 	opts     []string          // apt options while a new source is not installed
 	inst     map[string]pkgInfo
@@ -53,10 +54,10 @@ type txn struct {
 	kept     []ui.Pair                            // Kept (12.2)
 	keepFor  func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
 	notes    []*catalog.Recipe                    // per-user steps after install
-	prebuilt map[string]string                    // recipe → .deb already built (vendor .debs, repacks)
-	parts    map[string]string                    // package → .deb of a recipe with several (ADR 0018), installed as dependencies
+	prebuilt map[string]string                    // recipe -> .deb already built (vendor .debs, repacks)
+	parts    map[string]string                    // package -> .deb of a recipe with several (ADR 0018), installed as dependencies
 	leftover string                               // notice after remove (4.7)
-	restored map[string]string                    // replaced packages coming back → mark (ADR 0016)
+	restored map[string]string                    // replaced packages coming back -> mark (ADR 0016)
 	unpinned []string                             // hosts of unpinned repositories (ADR 0017)
 	sbNotes  []ui.Pair                            // Secure Boot notes (1.4)
 	notices  []ui.Pair                            // what needs the user, after the run
@@ -215,7 +216,7 @@ func (t *txn) check() (surprises []string, kernel string) {
 			}
 		case "Inst":
 			if x.Old != "" && apt.Compare(x.Version, x.Old) < 0 && !t.down[x.Name] {
-				surprises = append(surprises, "downgrades "+x.Name+" "+x.Old+" → "+x.Version)
+				surprises = append(surprises, "downgrades "+x.Name+" "+x.Old+" -> "+x.Version)
 			}
 		}
 	}
@@ -229,7 +230,7 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 	for _, x := range t.actions {
 		switch {
 		case x.Op == "Inst" && t.versions[x.Name] != "":
-			size := "—"
+			size := "-"
 			if n := sources[x.Name]; n > 0 {
 				size, download, disk = ui.Bytes(n), download+n, disk+n
 			}
@@ -242,7 +243,7 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 			}
 			ins = append(ins, ui.Row{Name: x.Name, Version: x.Version, Source: "dovy", Size: size, Note: note})
 		case x.Op == "Inst":
-			size := "—"
+			size := "-"
 			if s, ok := sizes[x.Name]; ok {
 				size, download, disk = ui.Bytes(s.Download), download+s.Download, disk+s.Installed
 				if x.Old != "" { // replaces the installed version's files
@@ -300,7 +301,7 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 		totals = append(totals, ui.Pair{Item: "Download", Reason: ui.Bytes(download)})
 	}
 	if disk >= 0 {
-		totals = append(totals, ui.Pair{Item: "Disk required", Reason: ui.Bytes(disk)})
+		totals = append(totals, ui.Pair{Item: "Disk needed", Reason: ui.Bytes(disk)})
 	} else {
 		totals = append(totals, ui.Pair{Item: "Disk freed", Reason: ui.Bytes(-disk)})
 	}
@@ -337,6 +338,21 @@ func sourceSizes(rs []*catalog.Recipe) map[string]int64 {
 	return sizes
 }
 
+// lastLine is the last line of a build's log so far.
+func lastLine(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() > 512 {
+		f.Seek(-512, io.SeekEnd)
+	}
+	b, _ := io.ReadAll(f)
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	return lines[len(lines)-1]
+}
+
 // same reports whether two simulations do the same, ignoring packages in skip.
 func same(a, b []apt.Action, skip map[string]bool) bool {
 	key := func(as []apt.Action) string {
@@ -368,6 +384,9 @@ func (a *app) run(t *txn) int {
 		if d := t.prebuilt[r.Name]; d != "" {
 			stubs = append(stubs, d)
 			continue
+		}
+		if build.IsDeb(r) {
+			a.at("preparing " + r.Name)
 		}
 		if build.IsDeb(r) && len(r.Sources) > 1 { // several packages (ADR 0018)
 			cache, err := build.CacheDir()
@@ -423,6 +442,7 @@ func (a *app) run(t *txn) int {
 		}
 		stubs = append(stubs, s)
 	}
+	a.at("asking apt")
 	if err := t.simulate(stubs); err != nil {
 		a.errs.Refuse(what, "apt cannot do it", err.Error())
 		return exitRefused
@@ -465,8 +485,10 @@ func (a *app) run(t *txn) int {
 			debian[x.Name] = x.Version
 		}
 	}
+	a.at("sizes")
 	sources := <-sized
 	secs, counts, totals := t.sections(apt.Sizes(t.opts, debian), sources)
+	a.wait.Stop()
 	if len(secs) == 0 {
 		fmt.Fprintln(a.out.Out, "Nothing to do.")
 		return exitOK
@@ -550,7 +572,9 @@ func (a *app) run(t *txn) int {
 		a.out.Rule("", "Download")
 		for _, r := range t.build {
 			for _, s := range r.Sources {
+				l := a.fetching(s.URL)
 				path, err := fetch.Get(s.URL, s.SHA256, filepath.Join(cache, "sources"))
+				l.Stop()
 				if err != nil {
 					return fail(err.Error(), "unchanged", "check the network, then: "+again)
 				}
@@ -560,7 +584,10 @@ func (a *app) run(t *txn) int {
 		}
 		if len(debian) > 0 {
 			args := append(append(append([]string{"install", "--download-only", "--allow-downgrades", "-y"}, apt.Options...), t.sourceOpts()...), pkgArgs(debian)...)
-			if err := apt.Run(logf, a.aptLine(nil, nil), args...); err != nil {
+			l := a.stepping(ui.Green, "Fetching")
+			err := apt.Run(logf, a.aptLine(nil, nil), args...)
+			l.Stop()
+			if err != nil {
 				return fail(err.Error(), "unchanged", "check the network, then: "+again)
 			}
 		}
@@ -571,13 +598,25 @@ func (a *app) run(t *txn) int {
 	var debs []string
 	for _, r := range t.build {
 		a.out.Rule("", "Build: "+r.Name)
-		d := t.prebuilt[r.Name]
+		d, built := t.prebuilt[r.Name], ""
 		if d == "" {
 			if build.Sourced(r) {
 				a.out.Say(ui.Green, "Building:", "in the sandbox; output in "+build.LogPath(cache, r.Name))
 			}
-			if d, err = build.Recipe(r, t.release, cache); err != nil {
+			l := a.out.Live(ui.Yellow, "Building", func(l *ui.Live) (string, string) {
+				if !build.Sourced(r) {
+					return r.Name, ""
+				}
+				return r.Name + "  " + l.Elapsed(), lastLine(build.LogPath(cache, r.Name))
+			})
+			d, err = build.Recipe(r, t.release, cache)
+			took := l.Elapsed()
+			l.Stop()
+			if err != nil {
 				return fail(err.Error(), "unchanged", "report it to the recipe's maintainer: "+r.Maintainer)
+			}
+			if build.Sourced(r) {
+				built = " in " + took
 			}
 			if missing := t.unplanned(d); len(missing) > 0 {
 				return fail(r.Name+" needs "+strings.Join(missing, ", ")+", not in the plan", "unchanged; the build is kept in "+filepath.Join(cache, "debs"),
@@ -585,7 +624,7 @@ func (a *app) run(t *txn) int {
 			}
 		}
 		fmt.Fprintln(logf, "Built: "+d)
-		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)", r.Package(), t.versions[r.Package()]))
+		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)%s", r.Package(), t.versions[r.Package()], built))
 		debs = append(debs, d)
 		a.out.Blank()
 	}
@@ -689,7 +728,11 @@ func (a *app) run(t *txn) int {
 		clear()
 		return code
 	}
-	if err := apt.Run(logf, a.aptLine(versions, &t.warnings), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...); err != nil {
+	doing := map[string][2]string{"install": {ui.Green, "Installing"}, "remove": {ui.Red, "Removing"}, "upgrade": {ui.Green, "Upgrading"}}[t.verb]
+	l := a.stepping(doing[0], doing[1])
+	err = apt.Run(logf, a.aptLine(versions, &t.warnings), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...)
+	l.Stop()
+	if err != nil {
 		return fail(err.Error(), "unknown: the operation stopped during apt", "run dovy again: it offers to recover")
 	}
 	if apt.Interrupted() {
@@ -749,7 +792,10 @@ func (a *app) run(t *txn) int {
 					line(l)
 				}
 			}
-			if err := apt.Run(logf, quiet, pargs...); err != nil {
+			l := a.stepping(ui.Red, "Removing")
+			err := apt.Run(logf, quiet, pargs...)
+			l.Stop()
+			if err != nil {
 				return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
 			}
 		}

@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/getdovy/dovy/internal/catalog"
+	"github.com/getdovy/dovy/internal/fetch"
 	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/ui"
 )
@@ -22,9 +24,88 @@ type app struct {
 	dir       string                            // local catalog
 	url       string                            // where updates come from
 	signers   []byte                            // trusted keys
-	installed func() (map[string]string, error) // recipe → installed version
+	installed func() (map[string]string, error) // recipe -> installed version
 	in        io.Reader                         // answers to Continue?
 	root      repo.Root                         // runs a command as root
+
+	// What the live line shows (principles 8.7); written by other goroutines.
+	wait  *ui.Live               // while planning
+	step  atomic.Pointer[string] // planning step
+	file  atomic.Pointer[string] // file being fetched
+	got   atomic.Int64           // its bytes so far
+	total atomic.Int64           // its size, or -1
+	pct   atomic.Int64           // apt's progress, percent
+	dl    atomic.Bool            // that step is a download
+	pkg   atomic.Pointer[string] // package apt is on
+}
+
+// planning starts the live line for the time before the plan is shown;
+// the returned func ends it. at names the step.
+func (a *app) planning() func() {
+	a.at("reading packages")
+	a.file.Store(nil)
+	a.wait = a.out.Live(ui.Cyan, "Planning", func(l *ui.Live) (string, string) {
+		step := *a.step.Load()
+		if f := a.file.Load(); f != nil && *f != "" { // a vendor package fetched to plan it
+			step = "fetching " + *f + a.fetched()
+		}
+		return step, l.Elapsed()
+	})
+	return a.wait.Stop
+}
+
+func (a *app) at(step string) { a.step.Store(&step) }
+
+// fetched is how far the current download is: " 42%", or its size so far.
+func (a *app) fetched() string {
+	got, total := a.got.Load(), a.total.Load()
+	switch {
+	case total > 0:
+		return fmt.Sprintf(" %d%%", got*100/total)
+	case got > 0:
+		return " " + ui.Bytes(got)
+	}
+	return ""
+}
+
+// progress receives fetch.Progress.
+func (a *app) progress(url string, got, total int64) {
+	name := filepath.Base(url)
+	a.file.Store(&name)
+	if total > 0 && got >= total { // done: the step shows again
+		a.file.Store(nil)
+	}
+	a.got.Store(got)
+	a.total.Store(total)
+}
+
+// fetching is the live line of one download.
+func (a *app) fetching(url string) *ui.Live {
+	name := filepath.Base(url)
+	a.got.Store(0)
+	a.total.Store(-1)
+	return a.out.Live(ui.Green, "Fetching", func(l *ui.Live) (string, string) {
+		got, total := a.got.Load(), a.total.Load()
+		if total <= 0 {
+			return name + "  " + ui.Bytes(got), l.Rate(got)
+		}
+		return fmt.Sprintf("%s %3d%%  %s  %s of %s", ui.Bar(got, total, 16), got*100/total, name, ui.Bytes(got), ui.Bytes(total)), l.Rate(got)
+	})
+}
+
+// stepping is the live line of an apt step: its bar and current package.
+func (a *app) stepping(color, verb string) *ui.Live {
+	a.dl.Store(verb == "Fetching") // apt reports its own downloads in every step
+	a.pct.Store(0)
+	a.pkg.Store(nil)
+	return a.out.Live(color, verb, func(l *ui.Live) (string, string) {
+		pct := a.pct.Load()
+		s := fmt.Sprintf("%s %3d%%", ui.Bar(pct, 100, 16), pct)
+		if p := a.pkg.Load(); p != nil {
+			s += "  " + *p
+		}
+		return s, l.Elapsed()
+	})
 }
 
 func newApp(out, errs *ui.UI) (*app, error) {
@@ -33,8 +114,10 @@ func newApp(out, errs *ui.UI) (*app, error) {
 		return nil, err
 	}
 	signers := catalog.Signers(catalog.KeysDir, func(s string) { errs.Say(ui.Yellow, "Warning:", s) })
-	return &app{out: out, errs: errs, dir: dir, url: catalog.URL, signers: signers,
-		installed: installed, in: os.Stdin, root: repo.Sudo}, nil
+	a := &app{out: out, errs: errs, dir: dir, url: catalog.URL, signers: signers,
+		installed: installed, in: os.Stdin, root: repo.Sudo}
+	fetch.Progress = a.progress
+	return a, nil
 }
 
 // installed asks dpkg which dovy packages are installed.
@@ -72,7 +155,9 @@ func (a *app) load() (map[string]*catalog.Recipe, int) {
 }
 
 func (a *app) update() int {
+	l := a.out.Live(ui.Cyan, "Fetching", func(l *ui.Live) (string, string) { return "catalog", l.Elapsed() })
 	c, err := catalog.Update(a.dir, a.url, a.signers)
+	l.Stop()
 	if err != nil {
 		sys, next := "unchanged; the previous catalog is kept", "check the network, then: dovy update"
 		if _, e := os.Stat(a.dir); e != nil {
@@ -98,7 +183,7 @@ func (a *app) update() int {
 		a.out.Say(ui.Green, "Added:", n+" "+rs[n].Version)
 	}
 	for _, u := range c.Updated {
-		a.out.Say(ui.Cyan, "Updated:", u.Name+" "+u.Old+" → "+u.New)
+		a.out.Say(ui.Cyan, "Updated:", u.Name+" "+u.Old+" -> "+u.New)
 	}
 	for _, n := range c.Dropped {
 		a.out.Say(ui.Yellow, "Dropped:", n)
@@ -144,7 +229,7 @@ func (a *app) rows() ([]row, int) {
 	return out, exitOK
 }
 
-// upstream strips the Debian revision: 1.0.0.85-1~dovy1 → 1.0.0.85.
+// upstream strips the Debian revision: 1.0.0.85-1~dovy1 -> 1.0.0.85.
 func upstream(v string) string {
 	if i := strings.LastIndex(v, "-"); i > 0 {
 		v = v[:i]
@@ -348,7 +433,7 @@ func (a *app) diff(r *catalog.Recipe) int {
 	if r.Repository != "" {
 		paths = append(paths, filepath.Join("repositories", r.Repository+".toml"))
 	}
-	a.out.Rule("", r.Name+": "+was+" → "+cur)
+	a.out.Rule("", r.Name+": "+was+" -> "+cur)
 	same := true
 	for _, p := range paths {
 		cmd := exec.Command("git", "diff", "--no-index", "--no-color", "--", filepath.Join(old, p), filepath.Join(a.dir, p))

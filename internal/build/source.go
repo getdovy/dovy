@@ -221,7 +221,7 @@ func sourceFiles(url, sum, cache, work string) ([]string, error) {
 	return ids, nil
 }
 
-// ParseDsc reads a .dsc's Checksums-Sha256: file name → sha256. A signed
+// ParseDsc reads a .dsc's Checksums-Sha256: file name -> sha256. A signed
 // .dsc is read through its signature armour.
 func ParseDsc(dsc string) (map[string]string, error) {
 	files := map[string]string{}

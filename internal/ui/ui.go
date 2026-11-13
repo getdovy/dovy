@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -25,6 +26,15 @@ const (
 
 const maxWidth = 100
 
+// The grid (principles 12.12): sentences, the prompt and the spinner at
+// column 0; every row at column 2; a row's own details at column 4; labels
+// and verbs 12 wide, so their text starts at column 15.
+const (
+	indent = "  "
+	sub    = "    "
+	label  = 12
+)
+
 // UI writes to Out. Width is the usable line width.
 type UI struct {
 	Out   io.Writer
@@ -35,11 +45,18 @@ type UI struct {
 // New sets up a UI for f: color only on a terminal without NO_COLOR.
 func New(f *os.File) *UI {
 	tty := isTerminal(f)
-	return &UI{
+	u := &UI{
 		Out:   f,
 		Color: tty && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
 		Width: min(columns(f), maxWidth),
 	}
+	u.Out = guarded{f}
+	if tty && os.Getenv("TERM") != "dumb" && f == os.Stdout { // the live line is drawn there
+		term.mu.Lock()
+		term.w, term.width, term.color = f, u.Width, u.Color
+		term.mu.Unlock()
+	}
+	return u
 }
 
 func isTerminal(f *os.File) bool {
@@ -78,27 +95,39 @@ func width(s string) int { return utf8.RuneCountInString(s) }
 func pad(s string, w int) string  { return s + strings.Repeat(" ", max(w-width(s), 0)) }
 func rpad(s string, w int) string { return strings.Repeat(" ", max(w-width(s), 0)) + s }
 
-// Rule prints a centered title rule: ──── Title ────
+// Rule prints a centered title rule: ---- Title ----
 func (u *UI) Rule(color, title string) {
+	if _, ok := u.Out.(guarded); ok && term.needBlank() { // a rule never touches the line above it
+		u.Blank()
+	}
 	t := " " + title + " "
 	l := (u.Width - width(title) - 2) / 2
 	r := max(u.Width-l-width(t), 0)
-	u.line(u.Paint(Dim, strings.Repeat("─", max(l, 0))) + u.Paint(color, u.Paint(Bold, t)) + u.Paint(Dim, strings.Repeat("─", r)))
+	u.line(u.Paint(Dim, strings.Repeat("-", max(l, 0))) + u.Paint(color, u.Paint(Bold, t)) + u.Paint(Dim, strings.Repeat("-", r)))
 }
 
-// Say prints a tool line with an aligned verb: "Unpacking:  steam (1.0)".
+// Say prints a tool line with an aligned verb: "  Unpacking:   steam (1.0)".
 func (u *UI) Say(color, verb, text string) {
-	u.line(u.Paint(color, pad(verb, 11)) + " " + text)
+	u.line(indent + u.Paint(color, pad(verb, label)) + " " + text)
 }
+
+// Under prints a line under a Say line, at its text.
+func (u *UI) Under(text string) { u.line(indent + pad("", label) + " " + text) }
 
 // Raw prints tool output indented, dim.
-func (u *UI) Raw(s string) { u.line("    " + u.Paint(Dim, s)) }
+func (u *UI) Raw(s string) { u.line(sub + u.Paint(Dim, s)) }
 
 // KV prints "  Key          value".
-func (u *UI) KV(k, v string) { u.line("  " + u.Paint(Dim, pad(k, 12)) + " " + v) }
+func (u *UI) KV(k, v string) { u.line(indent + u.Paint(Dim, pad(k, label)) + " " + v) }
+
+// Grace is waited before an error block. A tool that died of Ctrl-C makes
+// an error, but dovy received the Ctrl-C too: its handler ends the run
+// with "Cancelled" (8.10) within this time. Set by main; zero in tests.
+var Grace time.Duration
 
 // Fail prints the error block (topic 8, rule 8).
 func (u *UI) Fail(failed, system, next, log string) {
+	time.Sleep(Grace)
 	u.Rule(Red, "Error")
 	u.KV("Failed", failed)
 	u.KV("System", system)
@@ -110,6 +139,7 @@ func (u *UI) Fail(failed, system, next, log string) {
 
 // Refuse prints a refusal: nothing was changed.
 func (u *UI) Refuse(recipe, reason, found string) {
+	time.Sleep(Grace)
 	u.Rule(Yellow, "Refused")
 	u.KV("Recipe", recipe)
 	u.KV("Reason", reason)

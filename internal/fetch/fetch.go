@@ -44,6 +44,24 @@ func httpsOnly(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// Progress, when set, is told how much of url has arrived; total is -1
+// when the server does not say.
+var Progress func(url string, got, total int64)
+
+// counter reports what is written through it.
+type counter struct {
+	url        string
+	got, total int64
+}
+
+func (c *counter) Write(p []byte) (int, error) {
+	c.got += int64(len(p))
+	if Progress != nil {
+		Progress(c.url, c.got, c.total)
+	}
+	return len(p), nil
+}
+
 // get starts a GET that is cancelled when no byte arrives for Stall.
 func get(url string) (*http.Response, io.Reader, func(), error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,7 +120,7 @@ func Get(url, sum, dir string) (string, error) {
 	}
 	defer os.Remove(f.Name())
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(f, h), body)
+	_, err = io.Copy(io.MultiWriter(f, h, &counter{url: url, total: resp.ContentLength}), body)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

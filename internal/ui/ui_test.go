@@ -7,10 +7,13 @@ import (
 	"testing"
 )
 
-// The golden files are the agreed mockups (dovy-design/mockups v5, v6)
-// printed with NO_COLOR.
+// The golden files are the agreed layouts (dovy-design/mockups) printed
+// with NO_COLOR.
 func golden(t *testing.T, name string, got string) {
 	t.Helper()
+	if os.Getenv("DOVY_UPDATE_GOLDEN") != "" { // after an agreed change of layout
+		os.WriteFile("testdata/"+name, []byte(got), 0o644)
+	}
 	want, err := os.ReadFile("testdata/" + name)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +55,7 @@ func TestPlanWide(t *testing.T) {
 	})
 	u.Summary(
 		[]Count{{"Replace", 1, "package"}, {"Install", 1, "package"}, {"Dependencies", 12, "packages"}, {"System", 3, "changes"}},
-		[]Pair{{"Download", "157 MiB"}, {"Disk required", "512 MiB"}},
+		[]Pair{{"Download", "157 MiB"}, {"Disk needed", "512 MiB"}},
 	)
 	golden(t, "plan_wide.golden", b.String())
 }
@@ -102,7 +105,7 @@ func TestColorOff(t *testing.T) {
 	if strings.Contains(b.String(), "\033") {
 		t.Error("escape codes with color off")
 	}
-	if b.String() != "Unpacking:  steam (1.0)\n" {
+	if b.String() != "  Unpacking:   steam (1.0)\n" {
 		t.Errorf("got %q", b.String())
 	}
 }

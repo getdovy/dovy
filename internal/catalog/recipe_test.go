@@ -22,7 +22,7 @@ url = "https://example.org/steam.tar.gz"
 sha256 = "` + sha + `"
 `
 
-// catalogDir writes recipes (name → recipe.toml) into a temporary catalog.
+// catalogDir writes recipes (name -> recipe.toml) into a temporary catalog.
 func catalogDir(t *testing.T, recipes map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -88,7 +88,7 @@ func TestLoadRefuses(t *testing.T) {
 		"cycle": {map[string]string{
 			"a": strings.Replace(setup(`packages = ["p"]`+"\ndepends = [\"b\"]"), `"x"`, `"a"`, 1),
 			"b": strings.Replace(setup(`packages = ["p"]`+"\ndepends = [\"a\"]"), `"x"`, `"b"`, 1),
-		}, "dependency cycle: a → b → a"},
+		}, "dependency cycle: a -> b -> a"},
 	}
 	for name, c := range cases {
 		_, err := Load(catalogDir(t, c.recipes), noDebian)

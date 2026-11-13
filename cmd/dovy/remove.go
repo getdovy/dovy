@@ -103,6 +103,7 @@ func (a *app) remove(names []string) int {
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Catalog signature verified."))
 	go manualPkgs() // ready by the time the plan needs it
+	defer a.planning()()
 	inst, err := dpkgInstalled()
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check that dpkg works", "")
@@ -229,7 +230,7 @@ func (a *app) remove(names []string) int {
 		}
 	}
 	if len(notes) > 0 {
-		t.leftover = "Per-user lines added for " + strings.Join(notes, ", ") + " stay in ~/.bashrc; they do nothing now."
+		t.leftover = "Per-user steps done for " + strings.Join(notes, ", ") + " are not undone; they do nothing now."
 	}
 	code = a.run(t)
 	if code == exitOK {

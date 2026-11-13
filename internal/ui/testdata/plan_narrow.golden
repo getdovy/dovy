@@ -1,31 +1,31 @@
-───────────────────────── Removing ─────────────────────────
+------------------------- Removing -------------------------
   steam
-    1.0.0.85-1~dovy1 · dovy · 4.2 MiB
+    1.0.0.85-1~dovy1  dovy  4.2 MiB
     purged
 
-─────────────── Removing unused dependencies ───────────────
+--------------- Removing unused dependencies ---------------
   libasound2t64:i386
-    1.2.14-1 · Debian · 412 KiB
+    1.2.14-1  Debian  412 KiB
   libdrm2:i386
-    2.4.124-2 · Debian · 39 KiB
+    2.4.124-2  Debian  39 KiB
   libgl1:i386
-    1.7.0-1+b2 · Debian · 111 KiB
+    1.7.0-1+b2  Debian  111 KiB
   libllvm19:i386
-    1:19.1.7-3+b1 · Debian · 29.4 MiB
+    1:19.1.7-3+b1  Debian  29.4 MiB
   libvulkan1:i386
-    1.4.309.0-1 · Debian · 151 KiB
+    1.4.309.0-1  Debian  151 KiB
   libx11-6:i386
-    2:1.8.12-1 · Debian · 845 KiB
+    2:1.8.12-1  Debian  845 KiB
   mesa-vulkan-drivers:i386
-    25.0.7-2 · Debian · 11.6 MiB
+    25.0.7-2  Debian  11.6 MiB
 
-─────────────────────────── Kept ───────────────────────────
+--------------------------- Kept ---------------------------
   i386 architecture     needed by nvidia
   vlc                   installed by user
   config of 7 packages  in /etc; apt purge removes it
 
-───────────────────────── Summary ──────────────────────────
- Remove           1  package
- Dependencies     7  packages
+------------------------- Summary --------------------------
+  Remove       1 package
+  Dependencies 7 packages
 
- Disk freed         42 MiB
+  Disk freed   42 MiB

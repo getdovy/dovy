@@ -136,7 +136,11 @@ func Sizes(opts []string, pkgs map[string]string) map[string]Size {
 }
 
 // Status is a tidy line from apt's status channel (APT::Status-Fd).
-type Status struct{ Verb, Package string }
+type Status struct {
+	Verb, Package string
+	Download      bool    // a dlstatus line
+	Percent       float64 // of the whole step; -1 if none
+}
 
 // ParseStatus reads a pmstatus line: "pmstatus:pkg:pct:Unpacking pkg (amd64)".
 // ok is false for lines that are not status lines; Verb is empty for status
@@ -146,17 +150,23 @@ func ParseStatus(l string) (s Status, ok bool) {
 	if len(f) != 4 || (f[0] != "pmstatus" && f[0] != "dlstatus" && f[0] != "pmerror" && f[0] != "pmconffile") {
 		return s, false
 	}
+	s.Percent = -1
 	if _, err := strconv.ParseFloat(f[2], 64); err != nil { // pkg:arch:pct:text
 		if g := strings.SplitN(f[3], ":", 2); len(g) == 2 {
-			f[1], f[3] = f[1]+":"+f[2], g[1]
+			f[1], f[2], f[3] = f[1]+":"+f[2], g[0], g[1]
 		}
 	}
 	if f[0] == "pmerror" {
-		return Status{"Error:", f[1] + ": " + f[3]}, true
+		return Status{Verb: "Error:", Package: f[1] + ": " + f[3], Percent: -1}, true
 	}
+	if pct, err := strconv.ParseFloat(f[2], 64); err == nil {
+		s.Percent = pct
+	}
+	s.Download = f[0] == "dlstatus"
 	if f[0] != "pmstatus" {
 		return s, true
 	}
+	s.Package = f[1]
 	verbs := []struct{ prefix, verb string }{
 		{"Unpacking ", "Unpacking:"},
 		{"Configuring ", "Setting up:"},
@@ -170,7 +180,8 @@ func ParseStatus(l string) (s Status, ok bool) {
 			if arch == "(i386)" && !strings.Contains(name, ":") { // as apt-get -s names it
 				name += ":i386"
 			}
-			return Status{v.verb, name}, true
+			s.Verb, s.Package = v.verb, name
+			return s, true
 		}
 	}
 	return s, true
