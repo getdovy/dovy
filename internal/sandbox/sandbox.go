@@ -28,10 +28,14 @@ var userns = []string{"unshare", "--map-auto", "--map-root-user", "--mount", "--
 
 // Check reports why source builds cannot run here, or nil.
 func Check() error {
+	var missing []string // all at once: one command for the user
 	for _, t := range []struct{ cmd, pkg string }{{"mmdebstrap", "mmdebstrap"}, {"newuidmap", "uidmap"}} {
 		if _, err := exec.LookPath(t.cmd); err != nil {
-			return fmt.Errorf("source builds need %s: sudo apt install %s", t.cmd, t.pkg)
+			missing = append(missing, t.pkg)
 		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("source builds need %s: sudo apt install %s", strings.Join(missing, " and "), strings.Join(missing, " "))
 	}
 	out, err := exec.Command(userns[0], append(userns[1:], "true")...).CombinedOutput()
 	if err != nil {
