@@ -27,6 +27,7 @@ func (a *app) upgrade() int {
 	if code != exitOK {
 		return code
 	}
+	defer a.planning()()
 	release, err := deb.Release("/etc/os-release")
 	codename, cerr := capability.Codename("/etc/os-release")
 	if err == nil {

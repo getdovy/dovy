@@ -21,7 +21,7 @@ func (a *app) check() int {
 	bad := func(what, fix string) {
 		problems++
 		a.out.Say(ui.Red, "Problem:", what)
-		fmt.Fprintln(a.out.Out, "            fix: "+fix)
+		a.out.Under("fix: " + fix)
 	}
 
 	var rs map[string]*catalog.Recipe
@@ -79,7 +79,7 @@ func (a *app) check() int {
 	if len(byHand) > 0 {
 		bad("dovy's files changed by hand: "+brief(byHand), "reinstall the recipe: dovy remove <recipe>, then dovy install <recipe>")
 	} else {
-		ok(fmt.Sprintf("files of %d dovy packages as installed", len(ours)))
+		ok(fmt.Sprintf("files of %d dovy %s as installed", len(ours), plural(len(ours), "package")))
 	}
 	if len(theirs) > 0 {
 		a.out.Say(ui.Dim, "Note:", fmt.Sprintf("%d files changed by vendor packages' own scripts: %s", len(theirs), brief(theirs)))

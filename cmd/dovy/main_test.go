@@ -87,7 +87,7 @@ func withCatalog(t *testing.T, name string, inst map[string]string) (*app, *byte
 
 func TestCommands(t *testing.T) {
 	a, b := withCatalog(t, "v1", map[string]string{"steam": "1.0.0.84-1~dovy1", "yad": "14.2-1~dovy1"})
-	for _, w := range []string{"Release:    catalog-2026.01.10.1", "Added:      steam 1.0.0.85"} {
+	for _, w := range []string{"Release:     catalog-2026.01.10.1", "Added:       steam 1.0.0.85"} {
 		if !strings.Contains(b.String(), w) {
 			t.Errorf("update output lacks %q:\n%s", w, b)
 		}
@@ -125,7 +125,7 @@ func TestCommands(t *testing.T) {
 	b.Reset()
 	a.url = fixtureURL("v2")
 	run([]string{"update"}, a, 1000)
-	for _, w := range []string{"Added:      discord", "Updated:    steam 1.0.0.85 → 1.0.0.86", "Dropped:    zram"} {
+	for _, w := range []string{"Added:       discord", "Updated:     steam 1.0.0.85 -> 1.0.0.86", "Dropped:     zram"} {
 		if !strings.Contains(b.String(), w) {
 			t.Errorf("update to v2 lacks %q:\n%s", w, b)
 		}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
 	"github.com/getdovy/dovy/internal/ui"
@@ -160,7 +161,8 @@ func cancelOnInterrupt(out io.Writer) {
 
 func main() {
 	out, errs := ui.New(os.Stdout), ui.New(os.Stderr)
-	cancelOnInterrupt(os.Stdout)
+	cancelOnInterrupt(out.Out)
+	ui.Grace = 150 * time.Millisecond
 	a, err := newApp(out, errs)
 	if err != nil {
 		errs.Fail(err.Error(), "unchanged", "set HOME or XDG_DATA_HOME", "")

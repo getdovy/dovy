@@ -65,6 +65,7 @@ func (a *app) install(names []string) int {
 	}
 	fmt.Fprintln(a.out.Out, a.out.Paint(ui.Green, "Catalog signature verified."))
 	go manualPkgs() // ready by the time the plan needs it
+	defer a.planning()()
 	order, missing := resolve(rs, names)
 	if missing != "" {
 		a.errs.Fail("no recipe "+missing, "unchanged", "dovy search "+missing, "")
@@ -99,7 +100,7 @@ func (a *app) install(names []string) int {
 	}
 	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
-	needs := map[string][]string{} // capability → recipes
+	needs := map[string][]string{} // capability -> recipes
 	// A bundle member whose other half is installed or asked for is skipped:
 	// the user's choice stands (6.8).
 	member := map[string]string{}
@@ -185,6 +186,7 @@ func (a *app) install(names []string) int {
 	// Capabilities, built from the system's sources (5.1–5.4), and vendor
 	// repositories, keys checked now (2.4, 5.10).
 	t.inst = inst
+	a.at("sources")
 	sim := newSimConfig()
 	if err := t.capabilities(needs, codename, sim); err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
@@ -212,6 +214,7 @@ func (a *app) install(names []string) int {
 			a.errs.Fail(err.Error(), "unchanged", "set HOME or XDG_CACHE_HOME", "")
 			return exitFailed
 		}
+		a.at("fetching " + r.Name)
 		d, v, refusal, err := t.repacked(r, cache)
 		if err != nil {
 			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
@@ -240,6 +243,7 @@ func (a *app) install(names []string) int {
 		}
 	}
 	if !sim.empty() {
+		a.at("reading new sources")
 		if err := t.withConfig(sim); err != nil {
 			a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
 			return exitFailed
@@ -437,6 +441,12 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 	}
 	return func(l string) {
 		if s, ok := apt.ParseStatus(l); ok {
+			if s.Percent >= 0 && s.Download == a.dl.Load() { // the live line's bar
+				a.pct.Store(int64(s.Percent))
+			}
+			if s.Package != "" && !s.Download {
+				a.pkg.Store(&s.Package)
+			}
 			if s.Verb == "" {
 				return
 			}
@@ -455,6 +465,9 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 		if f, ok := apt.ParseFetch(l); ok {
 			switch f.Kind {
 			case "Get":
+				if name, _, _ := strings.Cut(f.Text, " "); f.Package {
+					a.pkg.Store(&name)
+				}
 				if f.Package {
 					size := f.Size
 					if n := apt.Bytes(f.Size); n >= 0 {

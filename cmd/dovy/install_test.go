@@ -100,7 +100,7 @@ func TestSections(t *testing.T) {
 	if len(secs) != 2 || secs[0].Title != "Installing" || len(secs[0].Rows) != 1 || len(secs[1].Rows) != 16 {
 		t.Fatalf("got %+v", secs)
 	}
-	if r := secs[0].Rows[0]; r.Source != "dovy" || r.Size != "—" {
+	if r := secs[0].Rows[0]; r.Source != "dovy" || r.Size != "-" {
 		t.Errorf("dovy row %+v", r)
 	}
 	if counts[1] != (ui.Count{Verb: "Dependencies", N: 16, Unit: "packages"}) || totals[0].Reason != "1.4 MiB" {

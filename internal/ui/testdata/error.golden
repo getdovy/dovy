@@ -1,4 +1,4 @@
-──────────────────────────────────── Error ─────────────────────────────────────
+------------------------------------ Error -------------------------------------
   Failed       build of steam (tar exit 2)
   System       unchanged; nothing was installed
   Next         free disk space, then: dovy install steam
