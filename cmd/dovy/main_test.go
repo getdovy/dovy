@@ -48,6 +48,7 @@ func TestRun(t *testing.T) {
 		{"list", 0, exitRefused, "dovy runs as root"},
 		{"install steam", 1000, exitFailed, "no catalog yet"},
 		{"remove steam", 1000, exitFailed, "no catalog yet"},
+		{"remove steam dovy", 1000, exitRefused, "sudo apt remove dovy"},
 		{"check", 1000, exitFailed, "Problem:"},
 		{"list", 1000, exitFailed, "no catalog yet"},
 	}
@@ -136,7 +137,7 @@ func TestCommands(t *testing.T) {
 	if code := run([]string{"update"}, a, 1000); code != exitOK {
 		t.Errorf("mixed update: exit %d\n%s", code, b)
 	}
-	for _, w := range []string{"catalog-2026.03.10.2 skipped: not signed by a trusted key", "Catalog verified: catalog-2026.02.10.1. Nothing new."} {
+	for _, w := range []string{"catalog-2026.03.10.2: not signed by a trusted key", "Catalog verified: catalog-2026.02.10.1. Nothing new."} {
 		if !strings.Contains(b.String(), w) {
 			t.Errorf("mixed update lacks %q:\n%s", w, b)
 		}

@@ -70,6 +70,21 @@ func (a *app) upgrade() int {
 		t.build = append(t.build, x)
 		t.versions[r.Package()] = deb.Version(r, release)
 	}
+	// dovy first, alone (9.4): the new dovy plans the rest after a restart.
+	if r := rs["dovy"]; r != nil && byRecipe["dovy"] != "" && supports(r, release) &&
+		apt.Compare(deb.Version(r, release), inst[byRecipe["dovy"]].Version) > 0 {
+		if os.Getenv(Restarted) != "" { // upgraded and restarted, yet still old: never loop
+			a.errs.Fail("dovy is still "+inst[byRecipe["dovy"]].Version+" after upgrading itself to "+deb.Version(r, release),
+				"unchanged", "install the newest dovy from https://github.com/getdovy/dovy/releases", "")
+			return exitFailed
+		}
+		add(r)
+		t.notices = append(t.notices, ui.Pair{Item: "dovy", Reason: "upgraded first, alone; it then plans the rest of this upgrade"})
+		if code := a.run(t); code != exitOK {
+			return code
+		}
+		return exitRestart
+	}
 	for _, name := range sortedKeys(byRecipe) {
 		r := rs[name]
 		switch {

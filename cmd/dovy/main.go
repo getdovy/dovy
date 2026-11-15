@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/getdovy/dovy/internal/apt"
+	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
@@ -26,6 +27,14 @@ const (
 	exitUsage     = 2
 	exitRefused   = 3
 	exitCancelled = 4
+	exitRestart   = 5 // dovy upgraded itself: the new one carries on (never shown)
+)
+
+// Self is where dovy's package installs it, and Restarted marks the run
+// that dovy started after upgrading itself (principles 9.4).
+const (
+	Self      = "/usr/bin/dovy"
+	Restarted = "DOVY_RESTARTED"
 )
 
 const usage = `usage: dovy <command> [arguments]
@@ -163,12 +172,19 @@ func main() {
 	out, errs := ui.New(os.Stdout), ui.New(os.Stderr)
 	cancelOnInterrupt(out.Out)
 	ui.Grace = 150 * time.Millisecond
+	catalog.Running = version
 	a, err := newApp(out, errs)
 	if err != nil {
 		errs.Fail(err.Error(), "unchanged", "set HOME or XDG_DATA_HOME", "")
 		os.Exit(exitFailed)
 	}
-	os.Exit(run(os.Args[1:], a, os.Geteuid()))
+	code := run(os.Args[1:], a, os.Geteuid())
+	if code == exitRestart { // every deferred cleanup has run
+		err := syscall.Exec(Self, []string{"dovy", "upgrade"}, append(os.Environ(), Restarted+"=1"))
+		errs.Fail("restart: "+err.Error(), "dovy is upgraded; nothing else changed", "dovy upgrade", "")
+		code = exitFailed
+	}
+	os.Exit(code)
 }
 
 func run(args []string, a *app, euid int) int {
