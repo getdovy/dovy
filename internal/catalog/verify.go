@@ -166,16 +166,19 @@ func Verify(dir string, signers []byte) error {
 	if st != "" {
 		return errors.New("catalog files differ from the signed catalog")
 	}
-	return nil
+	return checkMinimum(dir, tag)
 }
 
 // Change is one recipe version change.
 type Change struct{ Name, Old, New string }
 
+// Skip is a newer release update passed over, and why.
+type Skip struct{ Tag, Why string }
+
 // Changes is what update brought.
 type Changes struct {
-	Tag            string   // release now in use
-	Skipped        []string // newer tags not signed by a trusted key
+	Tag            string // release now in use
+	Skipped        []Skip // newer releases not used: untrusted, or needing a newer dovy
 	Added, Dropped []string
 	Updated        []Change
 }
@@ -253,13 +256,30 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 		if _, err := git(work, "fetch", "-q", "--no-tags", "--depth", "1", url, "refs/tags/"+t+":refs/tags/"+t); err != nil {
 			return Changes{}, err
 		}
-		if verifyTag(work, t, signers) == nil {
-			c.Tag = t
-			break
+		if verifyTag(work, t, signers) != nil {
+			c.Skipped = append(c.Skipped, Skip{t, "not signed by a trusted key"})
+			continue
 		}
-		c.Skipped = append(c.Skipped, t)
+		// catalog.toml, read from the tag before anything is checked out (ADR 0023).
+		b, err := git(work, "show", t+":"+MinimumFile)
+		if err != nil {
+			c.Skipped = append(c.Skipped, Skip{t, "no " + MinimumFile})
+			continue
+		}
+		if why := readable([]byte(b)); why != "" {
+			c.Skipped = append(c.Skipped, Skip{t, why})
+			continue
+		}
+		c.Tag = t
+		break
 	}
-	if c.Tag == "" {
+	if c.Tag == "" { // the newest release's reason decides the message
+		switch s := c.Skipped[0]; {
+		case strings.HasPrefix(s.Why, "needs dovy"):
+			return Changes{}, TooNew("every trusted release needs a newer dovy; " + s.Tag + " " + s.Why)
+		case s.Why != "not signed by a trusted key":
+			return Changes{}, fmt.Errorf("no usable release; %s: %s", s.Tag, s.Why)
+		}
 		return Changes{}, ErrUntrusted
 	}
 	if err := rollback(c.Tag); err != nil {

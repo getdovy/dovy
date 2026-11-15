@@ -22,8 +22,11 @@ tag() { g -c user.signingkey="$tmp/$1.pub" tag -s -m "$2" "$2"; }
 T1=catalog-2026.01.10.1 T2=catalog-2026.02.10.1 T3=catalog-2026.03.10.1 T4=catalog-2026.03.10.2
 
 recipe() { mkdir -p "$tmp/repo/recipes/$1" && cat >"$tmp/repo/recipes/$1/recipe.toml"; }
+# catalog.toml (ADR 0023): the oldest dovy that can read the release.
+minimum() { printf 'dovy = "%s"\n' "$1" >"$tmp/repo/catalog.toml"; }
 
 git init -q -b main "$tmp/repo"
+minimum 0.0.0
 
 recipe steam <<'EOF'
 name = "steam"
@@ -115,6 +118,7 @@ bundle bad $T3 $T4
 # postfix makes apt remove an installed exim4.
 g checkout -q --orphan install
 g rm -q -r -f .
+minimum 0.0.0
 buildsh() { cat >"$tmp/repo/recipes/$1/build.sh"; }
 recipe pfetch <<'EOF'
 name = "pfetch"
@@ -881,5 +885,32 @@ T6=catalog-2026.04.11.1
 tag trusted $T6
 bundle install $T5 $T6
 
+# minimum: trusted releases needing dovy 1.0.0, then 9.9.9, then one
+# without catalog.toml (newest).
+g checkout -q --orphan minimum
+g rm -q -r -f .
+recipe zram <<'EOF'
+name = "zram"
+description = "Compressed swap in RAM"
+kind = "setup"
+version = "1"
+maintainer = "test"
+debian = [13]
+packages = ["systemd-zram-generator"]
+EOF
+minimum 1.0.0
+commit "needs 1.0.0"
+T7=catalog-2026.05.10.1
+tag trusted $T7
+minimum 9.9.9
+commit "needs 9.9.9"
+T8=catalog-2026.05.11.1
+tag trusted $T8
+g rm -q catalog.toml
+commit "no catalog.toml"
+T9=catalog-2026.05.12.1
+tag trusted $T9
+bundle minimum $T7 $T8 $T9
+
 rm -f "$out/catalog.bundle"
-echo "wrote $out/catalog-{v1,v2,mixed,bad,install-old,install}.bundle and $out/allowed_signers"
+echo "wrote $out/catalog-{v1,v2,mixed,bad,install-old,install,minimum}.bundle and $out/allowed_signers"
