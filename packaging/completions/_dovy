@@ -1,0 +1,40 @@
+#compdef dovy
+# zsh completion for dovy: commands and recipe names, never options.
+
+local dir=${XDG_DATA_HOME:-$HOME/.local/share}/dovy/catalog/recipes
+local -a cmds pool installed typed described
+local name desc
+
+if (( CURRENT == 2 )); then
+	cmds=(
+		'install:plan, confirm, install'
+		'remove:plan, confirm, remove'
+		'update:fetch and verify the catalog'
+		'upgrade:one plan for everything'
+		'list:the catalog'
+		'search:search names and descriptions'
+		'show:details of a recipe'
+		'check:report problems'
+	)
+	_describe command cmds
+	return
+fi
+
+installed=(${(f)"$(dpkg-query -W -f '${X-Dovy-Recipe}\t${db:Status-Abbrev}\n' 2>/dev/null |
+	awk -F'\t' '$1 != "" && $1 != "dovy" && $2 ~ /^ii/ { print $1 }' | sort -u)"})
+pool=($dir/*/recipe.toml(N:h:t))
+case $words[2] in
+install) pool=(${pool:|installed}) ;;
+remove) pool=($installed) ;;
+show) (( CURRENT == 3 )) || return 1 ;;
+*) return 1 ;;
+esac
+typed=($words[3,CURRENT-1]) # a name on the line is not offered again
+pool=(${pool:|typed})
+
+for name in $pool; do
+	desc=
+	[[ -r $dir/$name/recipe.toml ]] && desc=${${(M)${(f)"$(<$dir/$name/recipe.toml)"}:#description = *}#description = }
+	described+=("${name//:/\\:}:${${desc#\"}%\"}")
+done
+_describe recipe described

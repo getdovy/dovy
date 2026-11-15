@@ -12,4 +12,13 @@ test:
 	go vet ./...
 	go test ./...
 
-.PHONY: dovy test
+# deb: dist/dovy_<VERSION>-1~dovy13_amd64.deb and dist/SHA256SUMS, built in
+# Debian 13 with its Go (specs/package.md). The source is mounted read-only.
+deb:
+	mkdir -p dist
+	docker run --rm -v "$(CURDIR)":/src:ro -v "$(CURDIR)/dist":/out debian:13 sh -ec '\
+		apt-get update -qq && apt-get install -qq -y --no-install-recommends golang-go ca-certificates >/dev/null; \
+		cp -r /src /tmp/w && cd /tmp/w && GOFLAGS=-buildvcs=false packaging/build-deb.sh $(VERSION) /out; \
+		chown -R $(shell id -u):$(shell id -g) /out'
+
+.PHONY: dovy test deb

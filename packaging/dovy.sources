@@ -1,0 +1,8 @@
+# Packages built on this machine by dovy, from signed recipes.
+# Not signed: only root writes this folder (ADR 0011). The keyring
+# is empty; it only names the source as dovy's.
+Types: deb
+URIs: file:/var/lib/dovy/repo
+Suites: ./
+Trusted: yes
+Signed-By: /usr/share/keyrings/dovy-local.pgp
