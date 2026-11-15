@@ -55,7 +55,8 @@ func TestUpdateAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"catalog-2026.03.10.2", "catalog-2026.03.10.1"}; c.Tag != "catalog-2026.02.10.1" || !reflect.DeepEqual(c.Skipped, want) {
+	untrusted := "not signed by a trusted key"
+	if want := []Skip{{"catalog-2026.03.10.2", untrusted}, {"catalog-2026.03.10.1", untrusted}}; c.Tag != "catalog-2026.02.10.1" || !reflect.DeepEqual(c.Skipped, want) {
 		t.Errorf("mixed: tag %s, skipped %v, want %v", c.Tag, c.Skipped, want)
 	}
 

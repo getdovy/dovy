@@ -139,7 +139,12 @@ func installed() (map[string]string, error) {
 // load verifies and reads the catalog (every run, topic 8 rule 2).
 func (a *app) load() (map[string]*catalog.Recipe, int) {
 	if err := catalog.Verify(a.dir, a.signers); err != nil {
-		a.errs.Fail("catalog check: "+err.Error(), "unchanged", "dovy update", "")
+		next := "dovy update"
+		var tooNew catalog.TooNew
+		if errors.As(err, &tooNew) { // dovy was downgraded: update cannot go back (rollback)
+			next = "install the newest dovy from https://github.com/getdovy/dovy/releases"
+		}
+		a.errs.Fail("catalog check: "+err.Error(), "unchanged", next, "")
 		return nil, exitFailed
 	}
 	rs, err := catalog.Load(a.dir, nil)
@@ -163,14 +168,18 @@ func (a *app) update() int {
 		if _, e := os.Stat(a.dir); e != nil {
 			sys = "unchanged; no catalog yet"
 		}
-		if errors.Is(err, catalog.ErrUntrusted) {
+		var tooNew catalog.TooNew
+		switch {
+		case errors.Is(err, catalog.ErrUntrusted):
 			next = "check the maintainer keys in " + catalog.KeysDir
+		case errors.As(err, &tooNew):
+			next = "install the newest dovy from https://github.com/getdovy/dovy/releases"
 		}
 		a.errs.Fail("update: "+err.Error(), sys, next, "")
 		return exitFailed
 	}
-	for _, t := range c.Skipped {
-		a.errs.Say(ui.Yellow, "Warning:", t+" skipped: not signed by a trusted key")
+	for _, s := range c.Skipped {
+		a.errs.Say(ui.Yellow, "Skipped:", s.Tag+": "+s.Why)
 	}
 	if len(c.Added)+len(c.Updated)+len(c.Dropped) == 0 {
 		fmt.Fprintln(a.out.Out, "Catalog verified: "+c.Tag+". Nothing new.")

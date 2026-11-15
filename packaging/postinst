@@ -1,0 +1,22 @@
+#!/bin/sh
+# dovy's repository index: written once, then kept by dovy (specs/package.md).
+set -e
+if [ "$1" = configure ]; then
+	repo=/var/lib/dovy/repo
+	install -d -m 755 "$repo" /var/log/dovy
+	[ -e "$repo/Packages" ] || : >"$repo/Packages"
+	if [ ! -e "$repo/Release" ]; then
+		cat >"$repo/Release" <<EOF
+Origin: dovy
+Label: dovy
+Suite: dovy
+Codename: dovy
+Date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S UTC')
+Architectures: amd64 all
+Description: packages built by dovy
+SHA256:
+ $(sha256sum <"$repo/Packages" | cut -d' ' -f1) $(wc -c <"$repo/Packages") Packages
+EOF
+		chmod 644 "$repo/Release"
+	fi
+fi

@@ -1,0 +1,133 @@
+.TH DOVY 1 "" "dovy" "User Commands"
+.SH NAME
+dovy \- install software Debian stable lacks, from signed recipes
+.SH SYNOPSIS
+.B dovy
+.I command
+.RI [ arguments ]
+.br
+.B dovy
+.BR \-\-help " | " \-\-version
+.SH DESCRIPTION
+.B dovy
+installs software that Debian stable does not ship, newer versions of
+software it does, and system setup such as backports, firmware and drivers.
+.PP
+Each piece of software is described by a recipe in a signed catalog.
+.B dovy
+builds a Debian package from the recipe on this machine, places it in a local
+repository, and installs it with apt in one transaction. Every change is
+shown as a plan and confirmed first. dpkg and apt remain the record of what
+is installed.
+.PP
+.B dovy
+runs as a regular user and asks for
+.BR sudo (8)
+when it needs root.
+.SH COMMANDS
+.TP
+.BI install " recipe" ...
+Plan, confirm and install the recipes, with the recipes they depend on.
+.TP
+.BI remove " recipe" ...
+Plan, confirm and remove the recipes. Debian packages a recipe replaced come
+back. A recipe another installed recipe needs is refused.
+.TP
+.B update
+Fetch the newest catalog release and verify its signature. Releases that are
+not signed by a trusted key, or that need a newer
+.BR dovy ,
+are skipped with the reason. Nothing on the system changes.
+.TP
+.B upgrade
+One plan for everything: the catalog, then
+.B dovy
+itself if a newer version is out, alone, after which the new version plans
+the rest: recipes with new versions, and Debian's own upgrade.
+.TP
+.BR list " [" \-\-installed " | " \-\-updates " | " \-\-orphaned ]
+The recipes in the catalog, or only those installed, with an update, or no
+longer in the catalog.
+.TP
+.BI search " word"
+Recipes whose name or description contains the word.
+.TP
+.BI show " recipe" " \fR[\fP\-\-recipe \fR|\fP \-\-diff\fR]\fP"
+Details of a recipe.
+.B \-\-recipe
+prints the recipe file;
+.B \-\-diff
+the changes since the installed version.
+.TP
+.B check
+Report problems with the catalog, dovy's files and installed recipes.
+Changes nothing.
+.SH OPTIONS
+.TP
+.B \-\-help
+Print the commands. After a command, print its usage.
+.TP
+.B \-\-version
+Print dovy's version.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Failed, or
+.B check
+found problems.
+.TP
+.B 2
+Wrong usage.
+.TP
+.B 3
+Refused: a rule or a check stopped the plan; nothing changed.
+.TP
+.B 4
+Cancelled: the plan was declined or interrupted; nothing changed.
+.SH FILES
+.TP
+.I ~/.local/share/dovy/catalog
+The catalog: a git clone of the newest trusted release
+.RB ( $XDG_DATA_HOME/dovy/catalog ).
+.TP
+.I ~/.cache/dovy
+Downloads, builds and the build sandbox
+.RB ( $XDG_CACHE_HOME/dovy ).
+.TP
+.I /var/lib/dovy/repo
+The local repository of packages dovy built.
+.TP
+.I /var/lib/dovy
+dovy's records: the catalog release last used, the run in progress.
+.TP
+.I /var/log/dovy
+One log per run.
+.TP
+.I /etc/dovy/keys.d
+Extra trusted catalog keys for this machine, in git's allowed-signers
+format. Files must be owned by root and writable by no one else.
+.TP
+.I /etc/apt/sources.list.d/dovy.sources
+apt's source for the local repository.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set, output has no colour.
+.TP
+.B XDG_DATA_HOME
+Where the catalog is kept; default
+.IR ~/.local/share .
+.TP
+.B XDG_CACHE_HOME
+Where downloads and builds are kept; default
+.IR ~/.cache .
+.SH SEE ALSO
+.BR apt (8),
+.BR dpkg (1),
+.BR sources.list (5),
+.BR sudo (8)
+.PP
+https://github.com/getdovy/dovy

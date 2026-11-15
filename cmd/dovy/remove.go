@@ -94,6 +94,10 @@ func unused(before, after []string, pkgs map[string]bool) []string {
 }
 
 func (a *app) remove(names []string) int {
+	if contains(names, "dovy") {
+		a.errs.Refuse("dovy", "dovy does not remove itself", "remove it with apt: sudo apt remove dovy")
+		return exitRefused
+	}
 	if code := a.unfinished(); code != exitOK {
 		return code
 	}

@@ -1,5 +1,5 @@
 // Package catalog reads, checks and verifies the recipe catalog
-// (dovy-design/specs/recipe.md, specs/catalog.md).
+// (dovy-catalog docs/recipe-format.md; dovy-design specs/catalog.md).
 package catalog
 
 import (

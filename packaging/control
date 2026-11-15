@@ -1,0 +1,16 @@
+Package: dovy
+Version: @VERSION@
+Architecture: amd64
+Section: admin
+Priority: optional
+Installed-Size: @SIZE@
+Maintainer: dovy maintainers <hmwassim@tuta.io>
+Depends: sudo, git, openssh-client, ca-certificates, mmdebstrap, uidmap
+Recommends: mokutil
+Homepage: https://github.com/getdovy/dovy
+X-Dovy-Recipe: dovy
+Description: installs software Debian stable lacks, from signed recipes
+ dovy builds packages on this machine from a signed catalog of recipes and
+ installs them with apt: software Debian stable lacks, newer versions of
+ software it ships, and system setup such as backports, firmware and
+ drivers.
