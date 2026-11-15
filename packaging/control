@@ -4,7 +4,7 @@ Architecture: amd64
 Section: admin
 Priority: optional
 Installed-Size: @SIZE@
-Maintainer: dovy maintainers <hmwassim@tuta.io>
+Maintainer: dovy maintainers <getdovy@tuta.io>
 Depends: sudo, git, openssh-client, ca-certificates, mmdebstrap, uidmap
 Recommends: mokutil
 Homepage: https://github.com/getdovy/dovy
