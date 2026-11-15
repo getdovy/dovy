@@ -1,0 +1,25 @@
+# Every pull request and push to main: format, vet, tests (ADR 0021), in
+# Debian 13 with its Go, as a regular user (some tests check root-owned
+# files and must not run as root).
+name: test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - run: |
+          apt-get update -qq
+          apt-get install -qq -y --no-install-recommends golang-go git openssh-client make ca-certificates
+          useradd -m ci
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          chown -R ci .
+          su ci -c 'GOFLAGS=-buildvcs=false make test'
