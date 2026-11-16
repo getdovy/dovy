@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds OUT/dovy_<version>-1~dovy13_amd64.deb and OUT/SHA256SUMS
+# Builds OUT/dovy_<version>_amd64.deb and OUT/SHA256SUMS
 # (specs/package.md). Run from the repository root, in Debian 13 with its
 # Go: make deb does both. Usage: packaging/build-deb.sh VERSION OUT
 set -eu
@@ -28,5 +28,7 @@ size=$(du -sk --exclude=DEBIAN "$root" | cut -f1)
 sed "s/@VERSION@/$deb/; s/@SIZE@/$size/" packaging/control >"$root/DEBIAN/control"
 
 mkdir -p "$out"
-dpkg-deb --root-owner-group -Zxz --build "$root" "$out/dovy_${deb}_amd64.deb"
-(cd "$out" && sha256sum "dovy_${deb}_amd64.deb" >SHA256SUMS)
+# The file name has no "~": GitHub turns it into "." in release files.
+file=dovy_${version}_amd64.deb
+dpkg-deb --root-owner-group -Zxz --build "$root" "$out/$file"
+(cd "$out" && sha256sum "$file" >SHA256SUMS)
