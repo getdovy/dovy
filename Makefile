@@ -12,7 +12,7 @@ test:
 	go vet ./...
 	go test ./...
 
-# deb: dist/dovy_<VERSION>-1~dovy13_amd64.deb and dist/SHA256SUMS, built in
+# deb: dist/dovy_<VERSION>_amd64.deb and dist/SHA256SUMS, built in
 # Debian 13 with its Go (specs/package.md). The source is mounted read-only.
 deb:
 	mkdir -p dist
