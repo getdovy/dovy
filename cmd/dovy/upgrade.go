@@ -125,8 +125,12 @@ func (a *app) upgrade() int {
 		if inst[byRecipe[name]].Version != deb.Version(r, release) {
 			add(r)
 		}
-		// A bundle's new members come with it (6.8); pairs stand.
-		for _, m := range r.Members {
+		// A bundle's new members and a recipe's new dependencies come with
+		// it (6.8), and theirs in turn; pairs stand.
+		next := append(append([]string{}, r.Members...), r.Depends...)
+		for len(next) > 0 {
+			m := next[0]
+			next = next[1:]
 			o := rs[m]
 			if o == nil || byRecipe[m] != "" || contains(t.names, m) {
 				continue
@@ -140,6 +144,9 @@ func (a *app) upgrade() int {
 				for _, c := range o.Needs() {
 					needs[c] = append(needs[c], m)
 				}
+				next = append(next, o.Depends...)
+			} else if contains(r.Depends, m) {
+				t.notices = append(t.notices, ui.Pair{Item: name, Reason: "now needs " + m + ", which cannot be installed here: dovy show " + m})
 			}
 		}
 	}
