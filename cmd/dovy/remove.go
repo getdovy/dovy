@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/md5"
 	"fmt"
 	"os"
 	"os/exec"
@@ -54,6 +55,42 @@ func recipePackages(inst map[string]pkgInfo) map[string]string {
 		}
 	}
 	return m
+}
+
+// installedAs finds p in inst under apt's name or dpkg's: dpkg adds the
+// native architecture to Multi-Arch: same packages (mesa-va-drivers:amd64).
+func installedAs(inst map[string]pkgInfo, p string) (pkgInfo, bool) {
+	if i, ok := inst[p]; ok {
+		return i, true
+	}
+	i, ok := inst[p+":amd64"]
+	return i, ok
+}
+
+// changedConfig reports whether the user changed one of pkg's config
+// files: dpkg records each one's md5 (4.4). A file deleted is no loss.
+func changedConfig(pkg string) bool {
+	out, _ := exec.Command("dpkg-query", "-W", "-f", "${Conffiles}", pkg).Output()
+	for _, c := range parseConffiles(string(out)) {
+		b, err := os.ReadFile(c.path)
+		if err == nil && fmt.Sprintf("%x", md5.Sum(b)) != c.md5 {
+			return true
+		}
+	}
+	return false
+}
+
+type conffile struct{ path, md5 string }
+
+// parseConffiles reads dpkg's Conffiles field: " /etc/x <md5> [obsolete]".
+func parseConffiles(s string) []conffile {
+	var cs []conffile
+	for _, l := range strings.Split(s, "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && strings.HasPrefix(f[0], "/") && len(f[1]) == 32 {
+			cs = append(cs, conffile{f[0], f[1]})
+		}
+	}
+	return cs
 }
 
 // leavesConfig reports whether removing pkg leaves config behind (4.4):
@@ -205,7 +242,7 @@ func (a *app) remove(names []string) int {
 
 	// Backports packages that stay installed return to stable (4.6); those
 	// left unused go with the recipe (4.1).
-	out, err := apt.Simulate(nil, t.args(nil)...)
+	out, err := apt.Simulate(apt.Unused, t.args(nil)...)
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
 		return exitFailed
@@ -320,7 +357,7 @@ func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[strin
 				continue
 			}
 			seen[p] = true
-			if _, ok := inst[p]; !ok {
+			if _, ok := installedAs(inst, p); !ok {
 				continue
 			}
 			reason := "needed by another package"
@@ -328,6 +365,16 @@ func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[strin
 				reason = "installed by the user"
 			}
 			kept = append(kept, ui.Pair{Item: p, Reason: reason})
+		}
+	}
+	var going []string
+	for p := range removing {
+		going = append(going, p)
+	}
+	sort.Strings(going)
+	for _, p := range going {
+		if i, _ := installedAs(inst, p); i.Recipe == "" && i.Capability == "" && changedConfig(p) {
+			kept = append(kept, ui.Pair{Item: p, Reason: "removed; the config you changed stays"})
 		}
 	}
 	return kept

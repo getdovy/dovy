@@ -51,6 +51,11 @@ func Parse(out string) []Action {
 	return as
 }
 
+// Unused makes apt count a package only suggested by another as unused
+// (4.1); apt keeps it by default. Given to every simulation whose "no
+// longer required" list dovy compares.
+var Unused = []string{"-o", "APT::AutoRemove::SuggestsImportant=false"}
+
 // NoLongerRequired reads apt's "no longer required" list.
 func NoLongerRequired(out string) []string {
 	var names []string
