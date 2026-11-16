@@ -122,6 +122,9 @@ func (a *app) upgrade() int {
 			}
 			continue
 		}
+		if name == "dovy" && apt.Compare(inst[byRecipe[name]].Version, deb.Version(r, release)) > 0 {
+			continue // a dovy newer than its recipe (installed from the release page) stays
+		}
 		if inst[byRecipe[name]].Version != deb.Version(r, release) {
 			add(r)
 		}
