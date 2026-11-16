@@ -56,20 +56,19 @@ Options:
 
 // command is one entry of the command set (principles topic 9).
 type command struct {
-	usage     string
-	milestone int
-	valid     func(args []string) string // "" or a usage error
+	usage string
+	valid func(args []string) string // "" or a usage error
 }
 
 var commands = map[string]command{
-	"install": {"install <recipe>...", 3, recipes},
-	"remove":  {"remove <recipe>...", 3, recipes},
-	"update":  {"update", 1, none},
-	"upgrade": {"upgrade", 9, none},
-	"list":    {"list [--installed | --updates | --orphaned]", 1, list},
-	"search":  {"search <word>", 1, search},
-	"show":    {"show <recipe> [--recipe | --diff]", 1, show},
-	"check":   {"check", 9, none},
+	"install": {"install <recipe>...", recipes},
+	"remove":  {"remove <recipe>...", recipes},
+	"update":  {"update", none},
+	"upgrade": {"upgrade", none},
+	"list":    {"list [--installed | --updates | --orphaned]", list},
+	"search":  {"search <word>", search},
+	"show":    {"show <recipe> [--recipe | --diff]", show},
+	"check":   {"check", none},
 }
 
 func none(args []string) string {
@@ -239,7 +238,5 @@ func run(args []string, a *app, euid int) int {
 	case "check":
 		return a.check()
 	}
-	errs.Fail(args[0]+" is not built yet", "unchanged",
-		fmt.Sprintf("milestone %d (dovy-design/build-order.md)", c.milestone), "")
-	return exitFailed
+	panic("dovy: command " + args[0] + " has no handler") // every entry of commands has one
 }

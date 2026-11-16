@@ -127,10 +127,6 @@ func (a *app) install(names []string) int {
 	}
 	order = kept
 	for _, r := range order {
-		if !build.Buildable(r) {
-			a.errs.Refuse(r.Name, "kind "+r.Kind+" is not built yet", "")
-			return exitRefused
-		}
 		if build.Sourced(r) {
 			if err := sandbox.Check(); err != nil {
 				a.errs.Refuse(r.Name, err.Error(), "")

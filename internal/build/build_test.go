@@ -32,13 +32,6 @@ sha256 = "1816aa30f763856403b1a4d91f73ffd79e96d3a0a5cef6f305f025253f6a3a6c"
 "/usr/bin/pfetch" = "pfetch"
 `
 
-func TestRefusesOtherKinds(t *testing.T) {
-	r := &catalog.Recipe{Name: "base", Kind: "other"}
-	if _, err := Recipe(r, 13, t.TempDir()); err == nil || !strings.Contains(err.Error(), "not built yet") {
-		t.Errorf("got %v", err)
-	}
-}
-
 // TestPfetch is milestone 2's proof. It downloads, uses sudo and writes
 // /var/lib/dovy/repo: run only in a disposable Debian 13 system.
 func TestPfetch(t *testing.T) {

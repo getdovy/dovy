@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/deb"
 	"github.com/getdovy/dovy/internal/fetch"
@@ -26,22 +25,9 @@ func CacheDir() (string, error) {
 	return filepath.Join(base, "dovy"), nil
 }
 
-// Buildable reports whether this dovy builds r's kind.
-func Buildable(r *catalog.Recipe) bool {
-	switch r.Kind {
-	case catalog.UpstreamBinary, catalog.Setup, catalog.VendorRepository, capability.Kind,
-		catalog.UpstreamBuild, catalog.TestingRebuild, catalog.Bundle:
-		return true
-	}
-	return false
-}
-
 // Recipe downloads, unpacks and packs r for a Debian release; it returns
 // the .deb's path under cache/debs.
 func Recipe(r *catalog.Recipe, release int, cache string) (string, error) {
-	if !Buildable(r) {
-		return "", fmt.Errorf("%s: kind %s is not built yet", r.Name, r.Kind)
-	}
 	work := filepath.Join(cache, "build", r.Name)
 	if err := sandbox.Remove(work); err != nil {
 		return "", err
