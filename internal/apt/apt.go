@@ -338,4 +338,7 @@ func Run(log io.Writer, fn func(string), args ...string) error {
 var Options = []string{
 	"-o", "APT::Status-Fd=3", "-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=-1",
 	"-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+	// A download that stalls fails after 30 s and is tried again, 3 times,
+	// instead of waiting for ever.
+	"-o", "Acquire::Retries=3", "-o", "Acquire::http::Timeout=30", "-o", "Acquire::https::Timeout=30",
 }
