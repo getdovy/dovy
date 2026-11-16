@@ -228,12 +228,13 @@ func (t *txn) check() (surprises []string, kernel string) {
 func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]ui.Section, []ui.Count, []ui.Pair) {
 	var ins, deps, down, rm, rmDeps []ui.Row
 	var download, disk int64
+	built := false // a package dovy builds: its unpacked size is known only after download
 	for _, x := range t.actions {
 		switch {
 		case x.Op == "Inst" && t.versions[x.Name] != "":
 			size := "-"
 			if n := sources[x.Name]; n > 0 {
-				size, download, disk = ui.Bytes(n), download+n, disk+n
+				size, download, disk, built = ui.Bytes(n), download+n, disk+n, true
 			}
 			note := ""
 			switch {
@@ -301,9 +302,15 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 	if download > 0 {
 		totals = append(totals, ui.Pair{Item: "Download", Reason: ui.Bytes(download)})
 	}
-	if disk >= 0 {
+	// Built packages count at their download size, so disk is a lower bound.
+	switch {
+	case disk >= 0 && built:
+		totals = append(totals, ui.Pair{Item: "Disk needed", Reason: "at least " + ui.Bytes(disk)})
+	case disk >= 0:
 		totals = append(totals, ui.Pair{Item: "Disk needed", Reason: ui.Bytes(disk)})
-	} else {
+	case built:
+		totals = append(totals, ui.Pair{Item: "Disk freed", Reason: "at most " + ui.Bytes(-disk)})
+	default:
 		totals = append(totals, ui.Pair{Item: "Disk freed", Reason: ui.Bytes(-disk)})
 	}
 	return secs, counts, totals

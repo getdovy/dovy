@@ -113,6 +113,12 @@ func TestSections(t *testing.T) {
 		t.Errorf("plan:\n%s", b.String())
 	}
 
+	// A package dovy builds counts at its download size: a lower bound.
+	_, _, totals = tx.sections(map[string]apt.Size{"ripgrep": {Download: 1433568, Installed: 5278 * 1024}}, map[string]int64{"dovy-cli-tools": 2 << 20})
+	if d := totals[len(totals)-1]; d.Item != "Disk needed" || !strings.HasPrefix(d.Reason, "at least ") {
+		t.Errorf("built package disk %+v", totals)
+	}
+
 	tx = &txn{versions: map[string]string{}, actions: simulated(t, "sim-downgrade.txt"), down: map[string]bool{},
 		inst: map[string]pkgInfo{"libgbm1": {Version: "26.1.6-1~bpo13+1", Size: 50 << 10}}}
 	secs, _, totals = tx.sections(map[string]apt.Size{"libgbm1": {Download: 45 << 10, Installed: 44 << 10}}, nil)
