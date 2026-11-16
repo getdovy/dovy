@@ -348,7 +348,7 @@ func (t *txn) leaveBackports(pinned, others []string, inst map[string]pkgInfo, l
 	}
 	var pkgs []string
 	for _, p := range installedDeps(pinned) {
-		i, ok := inst[p]
+		i, ok := installedAs(inst, p)
 		if !ok || keep[p] || !strings.Contains(i.Version, "~bpo") {
 			continue
 		}
@@ -497,12 +497,18 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 	}
 }
 
+// notInstalled reports whether pkg is no longer installed, as after a removal.
+func notInstalled(pkg string) bool {
+	out, _ := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Abbrev}", pkg).Output()
+	return !strings.HasPrefix(string(out), "ii")
+}
+
 // notices repeats what needs the user: reboots and per-user steps.
 func (a *app) notices(rs []*catalog.Recipe, versions map[string]string) {
 	var reboot []string
 	if b, err := os.ReadFile("/run/reboot-required.pkgs"); err == nil {
 		for _, n := range strings.Fields(string(b)) {
-			if _, ok := versions[n]; ok {
+			if _, ok := versions[n]; ok && !notInstalled(n) {
 				reboot = append(reboot, n)
 			}
 		}

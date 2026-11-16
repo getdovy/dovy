@@ -163,8 +163,9 @@ func (t *txn) simulate(stubs []string) error {
 	var base string
 	var berr error
 	done := make(chan struct{})
-	go func() { base, berr = apt.Simulate(t.opts, "autoremove"); close(done) }() // independent: at once
-	out, err := apt.Simulate(t.opts, t.args(stubs)...)
+	opts := append(append([]string{}, apt.Unused...), t.opts...)
+	go func() { base, berr = apt.Simulate(opts, "autoremove"); close(done) }() // independent: at once
+	out, err := apt.Simulate(opts, t.args(stubs)...)
 	if <-done; err == nil {
 		err = berr
 	}
@@ -755,11 +756,14 @@ func (a *app) run(t *txn) int {
 		}
 	}
 	for _, p := range sortedKeys(all) {
-		i := t.inst[p]
-		if i.Recipe == "" && i.Capability == "" {
-			continue
+		i, _ := installedAs(t.inst, p)
+		own := i.Recipe != "" || i.Capability != ""
+		if !own && (t.verb != "remove" || changedConfig(p)) {
+			continue // Debian's upgrade removes as apt does; config the user changed stays (4.4)
 		}
-		gone = append(gone, p)
+		if own {
+			gone = append(gone, p)
+		}
 		if configOnly(p) {
 			cmd := exec.Command("sudo", "--", "dpkg", "--purge", p)
 			cmd.Stdout, cmd.Stderr = logf, logf
