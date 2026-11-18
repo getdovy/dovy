@@ -281,7 +281,7 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 	}
 	manual := manualPkgs()
 	for _, p := range r.Replaces {
-		i, ok := inst[p]
+		i, ok := installedAs(inst, p) // a Multi-Arch: same package is name:amd64 to dpkg
 		if !ok || i.Recipe != "" {
 			continue
 		}
@@ -303,7 +303,7 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 func (t *txn) expectWith(r *catalog.Recipe, inst map[string]pkgInfo) {
 	manual := manualPkgs()
 	for _, p := range r.Packages {
-		if _, ok := inst[p]; ok && !manual[p] && t.removing[p] == "" {
+		if _, ok := installedAs(inst, p); ok && !manual[p] && t.removing[p] == "" {
 			t.removing[p] = "with " + r.Name
 		}
 	}

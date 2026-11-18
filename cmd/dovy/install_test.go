@@ -164,3 +164,15 @@ func TestPkgName(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceMultiArch(t *testing.T) {
+	// dpkg names a Multi-Arch: same package with its architecture.
+	inst := map[string]pkgInfo{"intel-media-va-driver:amd64": {Version: "25.2.3+dfsg1-1"}}
+	r := &catalog.Recipe{Name: "codecs", Kind: catalog.Setup, Replaces: []string{"intel-media-va-driver"}}
+	tx := &txn{removing: map[string]string{}}
+	tx.replace(r, map[string]string{}, inst)
+	if tx.removing["intel-media-va-driver"] != "replaced by codecs" || len(r.Replaced) != 1 ||
+		!strings.HasPrefix(r.Replaced[0], "intel-media-va-driver ") || strings.Join(tx.request, " ") != "intel-media-va-driver-" {
+		t.Errorf("removing %v, replaced %v, request %v", tx.removing, r.Replaced, tx.request)
+	}
+}
