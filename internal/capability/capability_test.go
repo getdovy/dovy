@@ -76,7 +76,7 @@ func TestExpand(t *testing.T) {
 		t.Errorf("got %v %v", x.Packages, x.Conflicts)
 	}
 	if len(x.Files) != 1 || x.Files[0].Path != "/etc/apt/preferences.d/dovy-mesa-backports.pref" ||
-		x.Files[0].Content != "Package: libgbm1 mesa-libgallium\nPin: release n=trixie-backports\nPin-Priority: 500\n" {
+		x.Files[0].Content != "Package: libgbm1:any mesa-libgallium:any\nPin: release n=trixie-backports\nPin-Priority: 500\n" {
 		t.Errorf("pin %+v", x.Files)
 	}
 	if len(rs["mesa-backports"].Packages) != 2 {
@@ -135,7 +135,7 @@ func TestI386(t *testing.T) {
 }
 
 func TestPinI386(t *testing.T) {
-	if got := Pin([]string{"libgl1-mesa-dri", "libgl1-mesa-dri:i386", "libgbm1"}, "trixie"); got != "Package: libgl1-mesa-dri libgbm1\nPin: release n=trixie-backports\nPin-Priority: 500\n" {
+	if got := Pin([]string{"libgl1-mesa-dri", "libgl1-mesa-dri:i386", "libgbm1"}, "trixie"); got != "Package: libgl1-mesa-dri:any libgbm1:any\nPin: release n=trixie-backports\nPin-Priority: 500\n" {
 		t.Errorf("got %q", got)
 	}
 	r := &catalog.Recipe{Name: "steam", Kind: catalog.Setup, Requires: []string{"components"}, Packages: []string{"steam-installer", "libgl1-mesa-dri:i386"}}
@@ -154,7 +154,7 @@ func TestRepo(t *testing.T) {
 	if !strings.Contains(x.Files[1].Content, "Signed-By: /usr/share/keyrings/dovy-brave.pgp\n") {
 		t.Errorf("source:\n%s", x.Files[1].Content)
 	}
-	want := "Package: *\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 1\n\nPackage: brave-browser brave-origin\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 100\n"
+	want := "Package: *\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 1\n\nPackage: brave-browser:any brave-origin:any\nPin: origin brave-browser-apt-release.s3.brave.com\nPin-Priority: 100\n"
 	if x.Files[2].Content != want {
 		t.Errorf("pin:\n%s", x.Files[2].Content)
 	}
@@ -172,5 +172,46 @@ func TestFlatSource(t *testing.T) {
 	q := &catalog.Repository{URI: "https://ppa.floorp.app/amd64", Suite: "./"}
 	if got := RepoSource(q, "/k", nil); got != "Types: deb\nURIs: https://ppa.floorp.app/amd64\nSuites: ./\nArchitectures: amd64\nSigned-By: /k\n" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestSignedByFallback(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "debian-archive-keyring.gpg")
+	os.WriteFile(key, nil, 0o644)
+	old := DebianKeyrings
+	DebianKeyrings = []string{"/nonexistent.gpg", key}
+	defer func() { DebianKeyrings = old }()
+
+	// A fresh install's one-line sources.list names no key.
+	srcs := ParseList("deb http://deb.debian.org/debian/ trixie main non-free-firmware\n")
+	for i := range srcs {
+		srcs[i].File = "/etc/apt/sources.list"
+	}
+	if text, _ := ComponentsSource(srcs, "trixie"); !strings.Contains(text, "Signed-By: "+key+"\n") {
+		t.Errorf("components without Debian's keyring:\n%s", text)
+	}
+	if text, _, _ := BackportsSource(srcs, "trixie", nil); !strings.Contains(text, "Signed-By: "+key+"\n") {
+		t.Errorf("backports without Debian's keyring:\n%s", text)
+	}
+	// Read after dovy's file: apt would refuse the pair, so no key is named.
+	srcs[0].File = "/etc/apt/sources.list.d/zz-mirror.sources"
+	if text, _ := ComponentsSource(srcs, "trixie"); strings.Contains(text, "Signed-By:") {
+		t.Errorf("key named for an entry apt reads later:\n%s", text)
+	}
+	// The entry's own key wins.
+	srcs[0].SignedBy = "/k.gpg"
+	if text, _ := ComponentsSource(srcs, "trixie"); !strings.Contains(text, "Signed-By: /k.gpg\n") {
+		t.Errorf("own key not kept:\n%s", text)
+	}
+}
+
+func TestComponentsBackports(t *testing.T) {
+	// The user's own backports line, main only: firmware-backports needs non-free-firmware there.
+	list := "deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware\n" +
+		"deb http://deb.debian.org/debian trixie-backports main\n"
+	text, added := ComponentsSource(ParseList(list), "trixie")
+	if !strings.Contains(text, "Suites: trixie-backports\nComponents: contrib non-free non-free-firmware\n") || strings.Contains(text, "Suites: trixie\n") ||
+		strings.Join(added, " ") != "contrib non-free non-free-firmware" {
+		t.Errorf("got %v\n%s", added, text)
 	}
 }

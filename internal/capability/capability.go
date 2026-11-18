@@ -165,8 +165,8 @@ func BackportsSource(srcs []Source, codename string, extra []string) (text strin
 		}
 	}
 	fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s-backports\nComponents: %s\n", main.URIs[0], codename, strings.Join(comps, " "))
-	if main.SignedBy != "" {
-		fmt.Fprintf(&b, "Signed-By: %s\n", main.SignedBy)
+	if k := signedBy(*main, "dovy-backports.sources"); k != "" {
+		fmt.Fprintf(&b, "Signed-By: %s\n", k)
 	}
 	return b.String(), false, nil
 }
@@ -219,16 +219,25 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	return &x
 }
 
-// Pin keeps exactly these packages on backports (5.4, 5.5). An :i386
-// package is pinned by its name, which covers both architectures.
+// Pin keeps exactly these packages on backports (5.4, 5.5), on every
+// architecture: apt matches a bare name on the native one only, so the
+// i386 copies of a pinned library would stay on stable and never match
+// the amd64 version (steam's and NVIDIA's 32-bit libraries).
 func Pin(pkgs []string, codename string) string {
+	return fmt.Sprintf("Package: %s\nPin: release n=%s-backports\nPin-Priority: 500\n", strings.Join(anyArch(pkgs), " "), codename)
+}
+
+// anyArch names each package once, as name:any, which apt's pins match
+// on every architecture.
+func anyArch(pkgs []string) []string {
 	var names []string
 	for _, p := range pkgs {
-		if n := strings.TrimSuffix(p, ":i386"); !contains(names, n) {
+		n, _, _ := strings.Cut(p, ":")
+		if n += ":any"; !contains(names, n) {
 			names = append(names, n)
 		}
 	}
-	return fmt.Sprintf("Package: %s\nPin: release n=%s-backports\nPin-Priority: 500\n", strings.Join(names, " "), codename)
+	return names
 }
 
 // Codename reads VERSION_CODENAME from an os-release file.
@@ -248,7 +257,7 @@ func Codename(osRelease string) (string, error) {
 }
 
 // ComponentsSource adds, for each Debian entry of the system (stable,
-// updates, security), only the components it lacks (5.3). added lists them;
+// updates, security, backports), only the components it lacks (5.3). added lists them;
 // text is empty when nothing is missing.
 func ComponentsSource(srcs []Source, codename string) (text string, added []string) {
 	var b strings.Builder
@@ -256,7 +265,7 @@ func ComponentsSource(srcs []Source, codename string) (text string, added []stri
 	for _, s := range srcs {
 		var suites []string
 		for _, suite := range s.Suites {
-			if suite == codename || suite == codename+"-updates" || suite == codename+"-security" {
+			if suite == codename || suite == codename+"-updates" || suite == codename+"-security" || suite == codename+"-backports" {
 				suites = append(suites, suite)
 			}
 		}
@@ -280,11 +289,34 @@ func ComponentsSource(srcs []Source, codename string) (text string, added []stri
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\n", s.URIs[0], strings.Join(suites, " "), strings.Join(missing, " "))
-		if s.SignedBy != "" {
-			fmt.Fprintf(&b, "Signed-By: %s\n", s.SignedBy)
+		if k := signedBy(s, "dovy-components.sources"); k != "" {
+			fmt.Fprintf(&b, "Signed-By: %s\n", k)
 		}
 	}
 	return b.String(), added
+}
+
+// DebianKeyrings are where debian-archive-keyring puts Debian's keys.
+var DebianKeyrings = []string{"/usr/share/keyrings/debian-archive-keyring.gpg", "/usr/share/keyrings/debian-archive-keyring.pgp"}
+
+// signedBy is the key for dovy's copy of the Debian entry s: its own, or,
+// when it names none (a fresh install's one-line sources.list), Debian's
+// keyring. apt refuses an entry without Signed-By read after one with it
+// for the same suite, so Debian's keyring is named only when apt reads s
+// before ours, dovy's file.
+func signedBy(s Source, ours string) string {
+	if s.SignedBy != "" {
+		return s.SignedBy
+	}
+	if s.File != "" && filepath.Base(s.File) != "sources.list" && filepath.Base(s.File) > ours {
+		return ""
+	}
+	for _, k := range DebianKeyrings {
+		if _, err := os.Stat(k); err == nil {
+			return k
+		}
+	}
+	return ""
 }
 
 // ComponentsRecipe is dovy-components; source is empty when nothing is
@@ -396,13 +428,8 @@ func RepoSource(q *catalog.Repository, keyring string, pkgs []string) string {
 // the repository (5.10): the host at 1, those packages at 100.
 func RepoPin(q *catalog.Repository, pkgs []string) string {
 	h := Host(q.URI)
-	var names []string
-	for _, p := range pkgs {
-		names = append(names, strings.TrimSuffix(p, ":i386")) // pins name packages, not architectures
-	}
-	pkgs = names
 	return fmt.Sprintf("Package: *\nPin: origin %s\nPin-Priority: 1\n\nPackage: %s\nPin: origin %s\nPin-Priority: 100\n",
-		h, strings.Join(pkgs, " "), h)
+		h, strings.Join(anyArch(pkgs), " "), h)
 }
 
 // Keyring is where a repository package installs its vendor's key.
