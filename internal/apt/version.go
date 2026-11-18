@@ -88,12 +88,23 @@ func Stable(opts []string, pkgs []string) map[string]string {
 	if len(pkgs) == 0 {
 		return nil
 	}
-	out, _ := exec.Command("apt-cache", append(append(opts, "madison"), pkgs...)...).Output()
-	return parseMadison(string(out))
+	out, _ := exec.Command("apt-cache", append(append(append([]string{}, opts...), "madison"), pkgs...)...).Output()
+	return parseMadison(string(out), false)
 }
 
-// parseMadison reads " pkg | version | url suite/component arch Packages".
-func parseMadison(out string) map[string]string {
+// Backports returns the newest backports version of each package, from
+// `apt-cache madison`; packages backports lacks are left out.
+func Backports(opts []string, pkgs []string) map[string]string {
+	if len(pkgs) == 0 {
+		return nil
+	}
+	out, _ := exec.Command("apt-cache", append(append(append([]string{}, opts...), "madison"), pkgs...)...).Output()
+	return parseMadison(string(out), true)
+}
+
+// parseMadison reads " pkg | version | url suite/component arch Packages",
+// keeping backports' versions or the others'.
+func parseMadison(out string, backports bool) map[string]string {
 	best := map[string]string{}
 	for _, l := range strings.Split(out, "\n") {
 		f := strings.Split(l, "|")
@@ -101,7 +112,7 @@ func parseMadison(out string) map[string]string {
 			continue
 		}
 		name, ver, src := strings.TrimSpace(f[0]), strings.TrimSpace(f[1]), strings.Fields(f[2])
-		if len(src) < 2 || strings.Contains(src[1], "-backports") || strings.Contains(ver, "~dovy") {
+		if len(src) < 2 || strings.Contains(src[1], "-backports") != backports || strings.Contains(ver, "~dovy") {
 			continue
 		}
 		if cur, ok := best[name]; !ok || Compare(ver, cur) > 0 {

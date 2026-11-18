@@ -189,6 +189,9 @@ func (t *txn) simulate(stubs []string) error {
 		}
 	}
 	t.actions = apt.Parse(out)
+	if err := t.follow(stubs); err != nil {
+		return err
+	}
 	asked := len(t.request)
 	if err := t.leaveI386(stubs); err != nil {
 		return err
