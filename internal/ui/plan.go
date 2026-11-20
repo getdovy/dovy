@@ -2,29 +2,24 @@ package ui
 
 import "strconv"
 
-// Row is one package in a plan table.
 type Row struct {
 	Name, Version, Source, Size, Note string
 }
 
-// Section is one plan table: Replacing, Installing, ...
 type Section struct {
 	Color, Title string
 	Rows         []Row
 }
 
-// Pair is an item and its reason.
 type Pair struct{ Item, Reason string }
 
-// Count is a summary line: "Install      1 package".
 type Count struct {
 	Verb string
 	N    int
 	Unit string
 }
 
-// Plan prints the plan tables. All tables share column widths; below the
-// table width each package takes two lines.
+// Plan: all tables share column widths; on narrow terminals each package takes two lines.
 func (u *UI) Plan(sections []Section) {
 	wn, wv, ws, wz := 7, 7, 6, 4
 	for _, s := range sections {
@@ -54,7 +49,6 @@ func (u *UI) Plan(sections []Section) {
 	}
 }
 
-// Pairs prints a titled list of items with reasons.
 func (u *UI) Pairs(color, title string, rows []Pair) {
 	u.Rule(color, title)
 	w := 0
@@ -67,7 +61,6 @@ func (u *UI) Pairs(color, title string, rows []Pair) {
 	u.Blank()
 }
 
-// Summary prints counts, then totals such as download size.
 func (u *UI) Summary(counts []Count, totals []Pair) {
 	u.Rule("", "Summary")
 	for _, c := range counts {
@@ -81,8 +74,6 @@ func (u *UI) Summary(counts []Count, totals []Pair) {
 	}
 }
 
-// Grid prints list and search results: a header and four columns, the last
-// one free. The third column (status) is colored by its value.
 func (u *UI) Grid(title string, header [4]string, rows [][4]string) {
 	u.Rule("", title)
 	var w [3]int

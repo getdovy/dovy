@@ -1,6 +1,4 @@
-// Package capability builds what recipes require from the system: Debian
-// backports for now (principles 5.1, 5.4). Capabilities are packages, never
-// recipes; recipe packages depend on them.
+// Package capability builds the system packages recipes depend on.
 package capability
 
 import (
@@ -18,32 +16,109 @@ import (
 // Kind marks a capability package: X-Dovy-Capability, not X-Dovy-Recipe.
 const Kind = "capability"
 
-// Capability packages.
 const (
 	Backports  = "dovy-backports"
 	Components = "dovy-components"
 	I386       = "dovy-i386"
 )
 
-// Package names a capability's package: backports -> dovy-backports.
 func Package(name string) string { return "dovy-" + name }
 
-// nonFree is what the components capability adds when missing (5.3).
 var nonFree = []string{"contrib", "non-free", "non-free-firmware"}
 
-// Source is one apt source entry.
 type Source struct {
 	URIs, Suites, Components []string
 	SignedBy                 string
-	File                     string // where it was read
+	File                     string
+	Codenames                map[string]string // suite -> release codename, when they differ
+	Foreign                  bool              // apt's lists name a non-Debian origin
 }
 
-// ParseDeb822 reads a .sources file.
+// release maps a role suite ("stable") to its codename as apt last fetched it; "" for a non-Debian source.
+func (s Source) release(suite string) string {
+	if s.Foreign {
+		return ""
+	}
+	if c := s.Codenames[suite]; c != "" {
+		return c
+	}
+	return suite
+}
+
+var debianOrigins = map[string]bool{"Debian": true, "Debian Backports": true}
+
+// Resolve maps role suites (stable, oldstable...) to codenames and marks vendor sources
+// Foreign, from apt's Release files. Suites apt has not fetched stay unresolved.
+func Resolve(srcs []Source, lists string) {
+	for i := range srcs {
+		for _, suite := range srcs[i].Suites {
+			for _, u := range srcs[i].URIs {
+				origin, c, ok := releaseFields(lists, u, suite)
+				if !ok {
+					continue
+				}
+				if !debianOrigins[origin] {
+					srcs[i].Foreign = true
+				}
+				if c != "" && c != suite {
+					if srcs[i].Codenames == nil {
+						srcs[i].Codenames = map[string]string{}
+					}
+					srcs[i].Codenames[suite] = c
+				}
+				break
+			}
+		}
+	}
+}
+
+func releaseFields(lists, uri, suite string) (origin, codename string, ok bool) {
+	base := filepath.Join(lists, listName(uri, suite))
+	for _, f := range []string{base + "InRelease", base + "Release"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			if v, found := strings.CutPrefix(l, "Origin:"); found && origin == "" {
+				origin = strings.TrimSpace(v)
+			}
+			if v, found := strings.CutPrefix(l, "Codename:"); found && codename == "" {
+				codename = strings.TrimSpace(v)
+			}
+		}
+		return origin, codename, true
+	}
+	return "", "", false
+}
+
+// listName mirrors apt's URItoFileName: no scheme or credentials, unsafe bytes %-quoted, "/" as "_".
+func listName(uri, suite string) string {
+	u := uri
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if at := strings.LastIndex(strings.SplitN(u, "/", 2)[0], "@"); at >= 0 {
+		u = u[at+1:]
+	}
+	u = strings.TrimSuffix(u, "/") + "/dists/" + suite + "/"
+	var b strings.Builder
+	for _, c := range []byte(u) {
+		if c <= 0x20 || c >= 0x7f || strings.IndexByte(`\|{}[]<>"^~_=!@#$%*`, c) >= 0 {
+			fmt.Fprintf(&b, "%%%02x", c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return strings.ReplaceAll(b.String(), "/", "_")
+}
+
 func ParseDeb822(text string) []Source {
 	var out []Source
 	cur := map[string]string{}
 	flush := func() {
-		if cur["types"] != "" && strings.Contains(cur["types"], "deb") && !strings.EqualFold(cur["enabled"], "no") {
+		// "Types: deb-src" alone carries no binary packages.
+		if contains(strings.Fields(cur["types"]), "deb") && !strings.EqualFold(cur["enabled"], "no") {
 			out = append(out, Source{
 				URIs: strings.Fields(cur["uris"]), Suites: strings.Fields(cur["suites"]),
 				Components: strings.Fields(cur["components"]), SignedBy: cur["signed-by"],
@@ -71,7 +146,6 @@ func ParseDeb822(text string) []Source {
 	return out
 }
 
-// ParseList reads one-line entries: deb [options] uri suite components...
 func ParseList(text string) []Source {
 	var out []Source
 	for _, l := range strings.Split(text, "\n") {
@@ -103,7 +177,6 @@ func ParseList(text string) []Source {
 	return out
 }
 
-// System reads the apt sources under etc (normally /etc/apt).
 func System(etc string) []Source {
 	var out []Source
 	if b, err := os.ReadFile(filepath.Join(etc, "sources.list")); err == nil {
@@ -116,7 +189,7 @@ func System(etc string) []Source {
 	sort.Strings(files)
 	for _, f := range files {
 		if strings.HasPrefix(filepath.Base(f), "dovy-") {
-			continue // dovy's own capabilities: computed, not read
+			continue // dovy's own files are computed, not read
 		}
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -137,14 +210,12 @@ func System(etc string) []Source {
 	return out
 }
 
-// BackportsSource is the source dovy-backports ships: the system's Debian
-// mirror, components and key, with the backports suite (5.4). present is
-// true when the system already has backports; then dovy ships nothing (3.6).
+// BackportsSource always writes the codename suite, which the pins name.
 func BackportsSource(srcs []Source, codename string, extra []string) (text string, present bool, err error) {
 	var main *Source
 	for i, s := range srcs {
 		for _, suite := range s.Suites {
-			switch suite {
+			switch s.release(suite) {
 			case codename + "-backports":
 				return "", true, nil
 			case codename:
@@ -165,14 +236,12 @@ func BackportsSource(srcs []Source, codename string, extra []string) (text strin
 		}
 	}
 	fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s-backports\nComponents: %s\n", main.URIs[0], codename, strings.Join(comps, " "))
-	if k := signedBy(*main, "dovy-backports.sources"); k != "" {
+	if k := signedBy(*main, []string{codename + "-backports"}, srcs, codename, "dovy-backports.sources"); k != "" {
 		fmt.Fprintf(&b, "Signed-By: %s\n", k)
 	}
 	return b.String(), false, nil
 }
 
-// BackportsRecipe is dovy-backports as a recipe to build. source is empty
-// when the system already has backports.
 func BackportsRecipe(source string) *catalog.Recipe {
 	r := &catalog.Recipe{
 		Name: "backports", Kind: Kind, Version: "1", Maintainer: "dovy",
@@ -186,8 +255,6 @@ func BackportsRecipe(source string) *catalog.Recipe {
 	return r
 }
 
-// Expand returns r as it is built: a backports recipe gets its pin (5.4)
-// and depends on dovy-backports; conflicts name the partner's package.
 func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *catalog.Recipe {
 	x := *r
 	x.Packages = append([]string{}, r.Packages...)
@@ -201,7 +268,7 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	for _, c := range r.Needs() {
 		x.Packages = append(x.Packages, Package(c))
 	}
-	if r.Repo != nil && !r.Repo.Repack { // its source, key and pin are the repository package's
+	if r.Repo != nil && !r.Repo.Repack { // the repository package ships source, key and pin
 		x.Packages = append(x.Packages, Package("repo-"+r.Repo.Name))
 	}
 	x.Recommends = nil
@@ -219,16 +286,12 @@ func Expand(r *catalog.Recipe, rs map[string]*catalog.Recipe, codename string) *
 	return &x
 }
 
-// Pin keeps exactly these packages on backports (5.4, 5.5), on every
-// architecture: apt matches a bare name on the native one only, so the
-// i386 copies of a pinned library would stay on stable and never match
-// the amd64 version (steam's and NVIDIA's 32-bit libraries).
 func Pin(pkgs []string, codename string) string {
 	return fmt.Sprintf("Package: %s\nPin: release n=%s-backports\nPin-Priority: 500\n", strings.Join(anyArch(pkgs), " "), codename)
 }
 
-// anyArch names each package once, as name:any, which apt's pins match
-// on every architecture.
+// anyArch uses name:any: apt pins match a bare name on the native architecture only,
+// leaving i386 copies on stable, out of step with amd64.
 func anyArch(pkgs []string) []string {
 	var names []string
 	for _, p := range pkgs {
@@ -240,7 +303,6 @@ func anyArch(pkgs []string) []string {
 	return names
 }
 
-// Codename reads VERSION_CODENAME from an os-release file.
 func Codename(osRelease string) (string, error) {
 	f, err := os.Open(osRelease)
 	if err != nil {
@@ -256,17 +318,14 @@ func Codename(osRelease string) (string, error) {
 	return "", fmt.Errorf("%s: no VERSION_CODENAME", osRelease)
 }
 
-// ComponentsSource adds, for each Debian entry of the system (stable,
-// updates, security, backports), only the components it lacks (5.3). added lists them;
-// text is empty when nothing is missing.
 func ComponentsSource(srcs []Source, codename string) (text string, added []string) {
 	var b strings.Builder
 	seen := map[string]bool{}
 	for _, s := range srcs {
 		var suites []string
 		for _, suite := range s.Suites {
-			if suite == codename || suite == codename+"-updates" || suite == codename+"-security" || suite == codename+"-backports" {
-				suites = append(suites, suite)
+			if debianSuite(s.release(suite), codename) {
+				suites = append(suites, suite) // the user's suite name, so both entries move together
 			}
 		}
 		if len(suites) == 0 || len(s.URIs) == 0 {
@@ -289,25 +348,43 @@ func ComponentsSource(srcs []Source, codename string) (text string, added []stri
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\n", s.URIs[0], strings.Join(suites, " "), strings.Join(missing, " "))
-		if k := signedBy(s, "dovy-components.sources"); k != "" {
+		if k := signedBy(s, suites, srcs, codename, "dovy-components.sources"); k != "" {
 			fmt.Fprintf(&b, "Signed-By: %s\n", k)
 		}
 	}
 	return b.String(), added
 }
 
-// DebianKeyrings are where debian-archive-keyring puts Debian's keys.
 var DebianKeyrings = []string{"/usr/share/keyrings/debian-archive-keyring.gpg", "/usr/share/keyrings/debian-archive-keyring.pgp"}
 
-// signedBy is the key for dovy's copy of the Debian entry s: its own, or,
-// when it names none (a fresh install's one-line sources.list), Debian's
-// keyring. apt refuses an entry without Signed-By read after one with it
-// for the same suite, so Debian's keyring is named only when apt reads s
-// before ours, dovy's file.
-func signedBy(s Source, ours string) string {
+func debianSuite(suite, codename string) bool {
+	return suite == codename || suite == codename+"-updates" || suite == codename+"-security" || suite == codename+"-backports"
+}
+
+// signedBy reuses the user's key path: apt rejects two different Signed-By values for one
+// URI and suite, even two paths to the same file (.gpg and .pgp). Inline keys are not copied.
+func signedBy(s Source, suites []string, srcs []Source, codename, ours string) string {
 	if s.SignedBy != "" {
 		return s.SignedBy
 	}
+	path := func(o Source) bool { return o.SignedBy != "" && !strings.Contains(o.SignedBy, "\n") }
+	for _, o := range srcs {
+		if path(o) && sameURI(o, s) && overlap(o.Suites, suites) {
+			return o.SignedBy
+		}
+	}
+	for _, o := range srcs {
+		// Only Debian's keyring, so a vendor key is never reused for a Debian entry.
+		if !path(o) || !strings.HasPrefix(filepath.Base(o.SignedBy), "debian-archive-keyring.") {
+			continue
+		}
+		for _, suite := range o.Suites {
+			if debianSuite(o.release(suite), codename) {
+				return o.SignedBy
+			}
+		}
+	}
+	// Not named for an entry apt reads after ours; apt 3.0 accepts either order, only two different keys conflict.
 	if s.File != "" && filepath.Base(s.File) != "sources.list" && filepath.Base(s.File) > ours {
 		return ""
 	}
@@ -319,8 +396,6 @@ func signedBy(s Source, ours string) string {
 	return ""
 }
 
-// ComponentsRecipe is dovy-components; source is empty when nothing is
-// missing.
 func ComponentsRecipe(source string) *catalog.Recipe {
 	r := &catalog.Recipe{
 		Name: "components", Kind: Kind, Version: "1", Maintainer: "dovy",
@@ -334,11 +409,9 @@ func ComponentsRecipe(source string) *catalog.Recipe {
 	return r
 }
 
-// I386Added records that dovy, not the user, added i386 (3.6, 5.2).
+// I386Added marks that dovy, not the user, added i386; only then does postrm remove it.
 const I386Added = "/var/lib/dovy/i386-added"
 
-// I386Recipe is dovy-i386: its scripts add i386 if missing and remove it
-// only if dovy added it and no i386 package is left (5.2, 4.8).
 func I386Recipe() *catalog.Recipe {
 	return &catalog.Recipe{
 		Name: "i386", Kind: Kind, Version: "1", Maintainer: "dovy",
@@ -364,8 +437,7 @@ fi
 	}
 }
 
-// Content is what a capability package ships, to compare with the installed
-// one: files and scripts.
+// Content is compared with the installed capability package to detect changes.
 func Content(r *catalog.Recipe) string {
 	var b strings.Builder
 	for _, f := range r.Files {
@@ -377,6 +449,27 @@ func Content(r *catalog.Recipe) string {
 	return b.String()
 }
 
+// sameURI ignores a trailing slash, as apt does.
+func sameURI(a, b Source) bool {
+	for _, u := range a.URIs {
+		for _, v := range b.URIs {
+			if strings.TrimSuffix(u, "/") == strings.TrimSuffix(v, "/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func overlap(a, b []string) bool {
+	for _, x := range a {
+		if contains(b, x) {
+			return true
+		}
+	}
+	return false
+}
+
 func contains(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {
@@ -386,7 +479,6 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// Host is a repository's host name, the unit of 5.10.
 func Host(uri string) string {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -395,7 +487,6 @@ func Host(uri string) string {
 	return u.Host
 }
 
-// UsedBy returns a source on host that the user configured, if any.
 func UsedBy(srcs []Source, host string) *Source {
 	for i, s := range srcs {
 		for _, u := range s.URIs {
@@ -407,8 +498,6 @@ func UsedBy(srcs []Source, host string) *Source {
 	return nil
 }
 
-// RepoSource is the apt source of a vendor repository, with its keyring;
-// i386 too when pkgs has :i386 packages.
 func RepoSource(q *catalog.Repository, keyring string, pkgs []string) string {
 	comps := ""
 	if !q.Flat() {
@@ -424,20 +513,16 @@ func RepoSource(q *catalog.Repository, keyring string, pkgs []string) string {
 		q.URI, q.Suite, comps, arch, keyring)
 }
 
-// RepoPin lets the vendor supply only the packages of the recipes using
-// the repository (5.10): the host at 1, those packages at 100.
+// RepoPin lets the vendor supply only the recipes' packages: host at 1, those packages at 100.
 func RepoPin(q *catalog.Repository, pkgs []string) string {
 	h := Host(q.URI)
 	return fmt.Sprintf("Package: *\nPin: origin %s\nPin-Priority: 1\n\nPackage: %s\nPin: origin %s\nPin-Priority: 100\n",
 		h, strings.Join(anyArch(pkgs), " "), h)
 }
 
-// Keyring is where a repository package installs its vendor's key.
 func Keyring(repo string) string { return "/usr/share/keyrings/dovy-" + repo + ".pgp" }
 
-// RepoRecipe is dovy-repo-<name>: the vendor's key (binary, checked by
-// fingerprint), source, pin for pkgs (the packages of the recipes using
-// it), and its files for the vendor's scripts (2.4, 2.6, 5.10, ADR 0013).
+// RepoRecipe ships the vendor key as binary, checked by fingerprint (ADR 0013).
 func RepoRecipe(q *catalog.Repository, key []byte, pkgs []string) *catalog.Recipe {
 	files := []catalog.File{
 		{Path: Keyring(q.Name), Content: string(key)},

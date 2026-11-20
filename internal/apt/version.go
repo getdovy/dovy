@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Compare orders Debian versions as dpkg does (deb-version(7)): <0, 0, >0.
+// Compare orders Debian versions as dpkg does, see deb-version(7).
 func Compare(a, b string) int {
 	ea, ua, ra := split(a)
 	eb, ub, rb := split(b)
@@ -30,8 +30,7 @@ func split(v string) (epoch, upstream, revision string) {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-// order: '~' sorts before everything, even the end of the string;
-// letters before non-letters.
+// order: '~' sorts before everything, even the end of the string; letters before non-letters.
 func order(c byte) int {
 	switch {
 	case c == '~':
@@ -82,8 +81,6 @@ func cmpNum(a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// Stable returns the newest Debian version of each package outside backports, from
-// `apt-cache madison`; missing packages are left out.
 func Stable(opts []string, pkgs []string) map[string]string {
 	if len(pkgs) == 0 {
 		return nil
@@ -92,8 +89,6 @@ func Stable(opts []string, pkgs []string) map[string]string {
 	return parseMadison(string(out), false)
 }
 
-// Backports returns the newest backports version of each package, from
-// `apt-cache madison`; packages backports lacks are left out.
 func Backports(opts []string, pkgs []string) map[string]string {
 	if len(pkgs) == 0 {
 		return nil
@@ -102,8 +97,7 @@ func Backports(opts []string, pkgs []string) map[string]string {
 	return parseMadison(string(out), true)
 }
 
-// parseMadison reads " pkg | version | url suite/component arch Packages",
-// keeping backports' versions or the others'.
+// parseMadison reads " pkg | version | url suite/component arch Packages", skipping ~dovy builds.
 func parseMadison(out string, backports bool) map[string]string {
 	best := map[string]string{}
 	for _, l := range strings.Split(out, "\n") {

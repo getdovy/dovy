@@ -29,7 +29,14 @@ function __dovy_offer --argument-names which
     end
     for n in $pool
         contains -- $n $typed; and continue
-        test $which = install; and contains -- $n $installed; and continue
+        if test $which = install
+            # --reinstall: installed ones only; otherwise those not installed.
+            if contains -- --reinstall $typed
+                contains -- $n $installed; or continue
+            else
+                contains -- $n $installed; and continue
+            end
+        end
         set -l desc
         test -r $dir/$n/recipe.toml; and set desc (string replace -rf '^description = "(.*)"$' '$1' <$dir/$n/recipe.toml)
         printf '%s\t%s\n' $n "$desc"
@@ -45,6 +52,7 @@ complete -c dovy -n __fish_use_subcommand -a list -d 'the catalog'
 complete -c dovy -n __fish_use_subcommand -a search -d 'search names and descriptions'
 complete -c dovy -n __fish_use_subcommand -a show -d 'details of a recipe'
 complete -c dovy -n __fish_use_subcommand -a check -d 'report problems'
+complete -c dovy -n __fish_use_subcommand -a clean -d 'delete downloads and builds in your cache'
 complete -c dovy -n '__fish_seen_subcommand_from install' -a '(__dovy_offer install)'
 complete -c dovy -n '__fish_seen_subcommand_from remove' -a '(__dovy_offer remove)'
 complete -c dovy -n '__fish_seen_subcommand_from show; and test (count (commandline -opc)) -eq 2' -a '(__dovy_offer show)'

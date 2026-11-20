@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The manual and the completions are written by hand (specs/package.md):
-// every command must appear in each.
+// The manual and completions are written by hand: every command must appear in each.
 func TestPackagingNamesEveryCommand(t *testing.T) {
 	files := map[string]func(cmd string) string{ // a pattern naming cmd
 		"../../packaging/dovy.1":                func(c string) string { return `(?m)^\.B[IR]? ` + c + `\b` },

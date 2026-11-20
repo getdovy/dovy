@@ -198,10 +198,177 @@ func TestSignedByFallback(t *testing.T) {
 	if text, _ := ComponentsSource(srcs, "trixie"); strings.Contains(text, "Signed-By:") {
 		t.Errorf("key named for an entry apt reads later:\n%s", text)
 	}
-	// The entry's own key wins.
 	srcs[0].SignedBy = "/k.gpg"
 	if text, _ := ComponentsSource(srcs, "trixie"); !strings.Contains(text, "Signed-By: /k.gpg\n") {
 		t.Errorf("own key not kept:\n%s", text)
+	}
+}
+
+func TestDeb822SourceOnly(t *testing.T) {
+	src := "Types: deb-src\nURIs: http://deb.debian.org/debian\nSuites: trixie-backports\nComponents: main\n"
+	if got := ParseDeb822(src); len(got) != 0 {
+		t.Errorf("deb-src only read as %d package source(s)", len(got))
+	}
+	if got := ParseDeb822(strings.Replace(src, "deb-src", "deb deb-src", 1)); len(got) != 1 {
+		t.Errorf("deb deb-src read as %d sources", len(got))
+	}
+	// Backports as source packages only: dovy still ships the binary source.
+	text, present, err := BackportsSource(ParseDeb822(deb822+"\n"+src), "trixie", nil)
+	if err != nil || present || !strings.Contains(text, "Suites: trixie-backports\n") {
+		t.Errorf("got %v %v\n%s", err, present, text)
+	}
+}
+
+func TestSignedByUser(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "debian-archive-keyring.gpg")
+	os.WriteFile(key, nil, 0o644)
+	old := DebianKeyrings
+	DebianKeyrings = []string{key}
+	defer func() { DebianKeyrings = old }()
+	at := func(srcs []Source, file string) []Source {
+		for i := range srcs {
+			srcs[i].File = file
+		}
+		return srcs
+	}
+	fresh := at(ParseList("deb http://deb.debian.org/debian/ trixie main non-free-firmware\n"), "/etc/apt/sources.list")
+
+	// Another Debian entry names .pgp: apt would refuse .gpg as a different key.
+	pgp := at(ParseDeb822("Types: deb\nURIs: http://security.debian.org/debian-security\nSuites: trixie-security\n"+
+		"Components: main contrib non-free non-free-firmware\nSigned-By: /usr/share/keyrings/debian-archive-keyring.pgp\n"),
+		"/etc/apt/sources.list.d/debian.sources")
+	srcs := append(append([]Source{}, fresh...), pgp...)
+	if text, _ := ComponentsSource(srcs, "trixie"); !strings.Contains(text, "Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp\n") || strings.Contains(text, key) {
+		t.Errorf("components without the user's key:\n%s", text)
+	}
+	if text, _, _ := BackportsSource(srcs, "trixie", nil); !strings.Contains(text, "Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp\n") {
+		t.Errorf("backports without the user's key:\n%s", text)
+	}
+
+	// Same URI and suite wins over other Debian entries: apt merges the two.
+	same := at(ParseList("deb [signed-by=/k.gpg] http://deb.debian.org/debian trixie contrib\n"), "/etc/apt/sources.list.d/extra.list")
+	srcs = append(append(append([]Source{}, pgp...), fresh...), same...)
+	text, _ := ComponentsSource(srcs, "trixie")
+	if !strings.Contains(text, "Suites: trixie\nComponents: contrib non-free\nSigned-By: /k.gpg\n") {
+		t.Errorf("same suite's key not used:\n%s", text)
+	}
+
+	// A key written inline is not copied: Debian's keyring, as before.
+	inline := at(ParseDeb822("Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie-updates\nComponents: main\n"+
+		"Signed-By:\n -----BEGIN PGP PUBLIC KEY BLOCK-----\n .\n -----END PGP PUBLIC KEY BLOCK-----\n"),
+		"/etc/apt/sources.list.d/debian.sources")
+	srcs = append(append([]Source{}, fresh...), inline...)
+	if text, _ := ComponentsSource(srcs, "trixie"); !strings.Contains(text, "Suites: trixie\nComponents: contrib non-free\nSigned-By: "+key+"\n") {
+		t.Errorf("inline key copied:\n%s", text)
+	}
+}
+
+func TestListName(t *testing.T) {
+	for _, c := range [][3]string{
+		{"http://deb.debian.org/debian", "trixie", "deb.debian.org_debian_dists_trixie_"},
+		{"http://security.debian.org/debian-security/", "trixie-security", "security.debian.org_debian-security_dists_trixie-security_"},
+		{"https://user:pw@mirror.example:8080/deb_ian", "stable", "mirror.example:8080_deb%5fian_dists_stable_"},
+	} {
+		if got := listName(c[0], c[1]); got != c[2] {
+			t.Errorf("%s %s: got %s", c[0], c[1], got)
+		}
+	}
+}
+
+func release(t *testing.T, lists, uri, suite, codename string) {
+	t.Helper()
+	releaseFrom(t, lists, uri, suite, "Debian", codename)
+}
+
+func releaseFrom(t *testing.T, lists, uri, suite, origin, codename string) {
+	t.Helper()
+	text := "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: " + origin + "\nSuite: " + suite + "\nCodename: " + codename + "\n"
+	if err := os.WriteFile(filepath.Join(lists, listName(uri, suite)+"InRelease"), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStableSuite(t *testing.T) {
+	const deb, sec = "http://deb.debian.org/debian", "http://security.debian.org/debian-security"
+	list := "deb " + deb + " stable main non-free-firmware\ndeb " + deb + " stable-updates main non-free-firmware\n" +
+		"deb " + sec + " stable-security main non-free-firmware\n"
+
+	// Never fetched: stable is not known to be trixie, as before.
+	if _, _, err := BackportsSource(ParseList(list), "trixie", nil); err == nil {
+		t.Error("unresolved stable taken as trixie")
+	}
+
+	lists := t.TempDir()
+	release(t, lists, deb, "stable", "trixie")
+	release(t, lists, deb, "stable-updates", "trixie-updates")
+	release(t, lists, sec, "stable-security", "trixie-security")
+	srcs := ParseList(list)
+	Resolve(srcs, lists)
+	text, added := ComponentsSource(srcs, "trixie")
+	if !strings.Contains(text, "Suites: stable\nComponents: contrib non-free\n") ||
+		!strings.Contains(text, "Suites: stable-updates\nComponents: contrib non-free\n") ||
+		!strings.Contains(text, "Suites: stable-security\nComponents: contrib non-free\n") || strings.Join(added, " ") != "contrib non-free" {
+		t.Errorf("components for stable: %v\n%s", added, text)
+	}
+	bp, present, err := BackportsSource(srcs, "trixie", nil)
+	if err != nil || present || !strings.Contains(bp, "URIs: "+deb+"\nSuites: trixie-backports\n") {
+		t.Errorf("backports for stable: %v %v\n%s", err, present, bp)
+	}
+
+	// stable-backports is the release's backports.
+	withBp := list + "deb " + deb + " stable-backports main\n"
+	releaseFrom(t, lists, deb, "stable-backports", "Debian Backports", "trixie-backports")
+	srcs = ParseList(withBp)
+	Resolve(srcs, lists)
+	if _, present, _ := BackportsSource(srcs, "trixie", nil); !present {
+		t.Error("stable-backports not seen as trixie-backports")
+	}
+
+	// Once forky is stable, a trixie system's stable entries are not trixie's.
+	forky := t.TempDir()
+	release(t, forky, deb, "stable", "forky")
+	release(t, forky, sec, "stable-security", "forky-security")
+	srcs = ParseList(list)
+	Resolve(srcs, forky)
+	if text, _ := ComponentsSource(srcs, "trixie"); strings.Contains(text, "Suites: stable") {
+		t.Errorf("forky's stable completed for trixie:\n%s", text)
+	}
+}
+
+func TestForeignTrixie(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "debian-archive-keyring.gpg")
+	os.WriteFile(key, nil, 0o644)
+	old := DebianKeyrings
+	DebianKeyrings = []string{key}
+	defer func() { DebianKeyrings = old }()
+	const docker, deb = "https://download.docker.com/linux/debian", "http://deb.debian.org/debian"
+	read := func() []Source {
+		v := ParseList("deb [signed-by=/usr/share/keyrings/docker.gpg] " + docker + " trixie stable\n")
+		v[0].File = "/etc/apt/sources.list.d/aa-docker.list"
+		d := ParseList("deb " + deb + " trixie main non-free-firmware\n")
+		d[0].File = "/etc/apt/sources.list.d/zz-debian.list"
+		return append(v, d...) // the vendor's entry first
+	}
+
+	// A vendor's "trixie" suite is not Debian's once apt's lists say so.
+	lists := t.TempDir()
+	releaseFrom(t, lists, docker, "trixie", "Docker", "trixie")
+	release(t, lists, deb, "trixie", "trixie")
+	srcs := read()
+	Resolve(srcs, lists)
+	if !srcs[0].Foreign || srcs[1].Foreign {
+		t.Fatalf("foreign: %v %v", srcs[0].Foreign, srcs[1].Foreign)
+	}
+	if text, _ := ComponentsSource(srcs, "trixie"); strings.Contains(text, docker) || !strings.Contains(text, "URIs: "+deb+"\n") {
+		t.Errorf("components for the vendor's entry:\n%s", text)
+	}
+	if bp, _, err := BackportsSource(srcs, "trixie", nil); err != nil || !strings.Contains(bp, "URIs: "+deb+"\n") {
+		t.Errorf("backports from the vendor's host: %v\n%s", err, bp)
+	}
+
+	// Never fetched: the vendor's key is still not given to Debian's entries.
+	if text, _ := ComponentsSource(read(), "trixie"); strings.Contains(text, "URIs: "+deb+"\nSuites: trixie\nComponents: contrib non-free\nSigned-By: /usr/share/keyrings/docker.gpg") {
+		t.Errorf("vendor key copied to Debian's entry:\n%s", text)
 	}
 }
 

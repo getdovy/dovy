@@ -1,5 +1,5 @@
 // Package pgp reads an OpenPGP public key file just far enough to check its
-// fingerprint (principles 2.4): dovy needs no gpg.
+// fingerprint, so dovy needs no gpg.
 package pgp
 
 import (
@@ -14,20 +14,17 @@ import (
 	"strings"
 )
 
-// Tags of the packets dovy looks at (RFC 9580).
+// Packet tags, RFC 9580.
 const (
 	tagPublicKey = 6
 )
 
-// Key is a key file read: its primary keys' fingerprints and the binary
-// keyring.
 type Key struct {
 	Fingerprints []string // uppercase hex, in file order
 	Binary       []byte
 }
 
-// Matches reports whether the file's primary keys are exactly want: none
-// missing, none extra (2.4).
+// Matches requires exactly want: none missing, none extra.
 func (k *Key) Matches(want []string) bool {
 	if len(k.Fingerprints) != len(want) {
 		return false
@@ -44,7 +41,6 @@ func (k *Key) Matches(want []string) bool {
 	return len(got) == len(want)
 }
 
-// Read parses an armored or binary key file.
 func Read(data []byte) (*Key, error) {
 	bin := data
 	if bytes.Contains(data, []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
@@ -74,7 +70,7 @@ func Read(data []byte) (*Key, error) {
 	return &Key{Fingerprints: fprs, Binary: bin}, nil
 }
 
-// fingerprint of a public key packet body: v4 SHA-1, v6 SHA-256.
+// fingerprint: v4 uses SHA-1, v6 SHA-256.
 func fingerprint(body []byte) (string, error) {
 	if len(body) == 0 {
 		return "", errors.New("empty key packet")
@@ -96,7 +92,6 @@ func fingerprint(body []byte) (string, error) {
 	return "", fmt.Errorf("key version %d not supported", body[0])
 }
 
-// packet splits off one packet: its tag, body and what follows.
 func packet(b []byte) (tag int, body, rest []byte, err error) {
 	if b[0]&0x80 == 0 {
 		return 0, nil, nil, errors.New("not an OpenPGP packet")
@@ -148,7 +143,6 @@ func pad(b []byte, from, n int) []byte {
 	return out
 }
 
-// dearmor returns the binary data of the ASCII-armored blocks, in order.
 func dearmor(s string) ([]byte, error) {
 	var out []byte
 	var b strings.Builder

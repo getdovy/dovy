@@ -14,7 +14,6 @@ import (
 	"strings"
 )
 
-// Conflict is one file two packages ship.
 type Conflict struct {
 	Path, Package, Owner string
 }
@@ -23,15 +22,13 @@ func (c Conflict) String() string {
 	return fmt.Sprintf("%s: %s belongs to %s", c.Package, c.Path, c.Owner)
 }
 
-// Deb is a package's name, Replaces, and files (not directories).
+// Deb holds files only, not directories.
 type Deb struct {
 	Package  string
 	Replaces []string
 	Files    []string
 }
 
-// Read lists a .deb's files with its own tar reader over dpkg-deb's
-// filesystem archive.
 func Read(path string) (*Deb, error) {
 	out, err := exec.Command("dpkg-deb", "-f", path, "Package", "Replaces").Output()
 	if err != nil {
@@ -62,8 +59,7 @@ func Read(path string) (*Deb, error) {
 	return d, cmd.Wait()
 }
 
-// list reads the file names of a tar archive and drains r: the writer still
-// has padding to send after the end marker, and blocks on a small pipe.
+// list drains r: the writer still has padding after the end marker and blocks on a small pipe.
 func list(r io.Reader) ([]string, error) {
 	defer io.Copy(io.Discard, r)
 	var files []string
@@ -82,7 +78,6 @@ func list(r io.Reader) ([]string, error) {
 	}
 }
 
-// names reads package names from a relation field, without versions.
 func names(field string) []string {
 	var n []string
 	for _, alt := range strings.Split(field, ",") {
@@ -95,7 +90,6 @@ func names(field string) []string {
 	return n
 }
 
-// Owners reads dpkg's file lists in infoDir: path -> package.
 func Owners(infoDir string) (map[string]string, error) {
 	lists, err := filepath.Glob(filepath.Join(infoDir, "*.list"))
 	if err != nil {
@@ -117,8 +111,7 @@ func Owners(infoDir string) (map[string]string, error) {
 	return owners, nil
 }
 
-// Diverted reads dpkg's diversions: path -> the package holding it, "" for
-// the administrator's own.
+// Diverted maps path -> the package holding it, "" for the administrator's own.
 func Diverted() map[string]string {
 	out, _ := exec.Command("dpkg-divert", "--list").Output()
 	return parseDiversions(string(out))
@@ -138,10 +131,8 @@ func parseDiversions(out string) map[string]string {
 	return d
 }
 
-// Check finds files the debs take from installed packages that stay, or
-// from each other, and files another package diverts (dpkg would rename
-// them silently). A package may take its own old files and those of
-// packages it Replaces; leaving names packages this transaction removes.
+// Check also reports diverted files, which dpkg would rename silently; leaving
+// names packages this transaction removes.
 func Check(debs []*Deb, owners map[string]string, leaving map[string]bool, diverted map[string]string) []Conflict {
 	var cs []Conflict
 	seen := map[string]string{}

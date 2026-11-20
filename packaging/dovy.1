@@ -26,8 +26,19 @@ runs as a regular user and asks for
 when it needs root.
 .SH COMMANDS
 .TP
-.BI install " recipe" ...
+.BR install " [" \-\-reinstall " [" \-\-restore\-config "]] \fIrecipe\fP ..."
 Plan, confirm and install the recipes, with the recipes they depend on.
+With
+.BR \-\-reinstall ,
+recipes already installed are installed again: dovy's own packages, from
+the local repository's copy, or built again when that copy is missing or
+damaged. Debian's and vendors' packages a recipe brings are not reinstalled.
+dpkg keeps config files you edited; with
+.B \-\-restore\-config
+as well, dovy's version comes back, edited files are kept as
+.IR file .dpkg\-old,
+and deleted ones are recreated. It is refused for a recipe not installed at
+the catalog's version.
 .TP
 .BI remove " recipe" ...
 Plan, confirm and remove the recipes. Debian packages a recipe replaced come
@@ -62,6 +73,11 @@ the changes since the installed version.
 .B check
 Report problems with the catalog, dovy's files and installed recipes.
 Changes nothing.
+.TP
+.B clean
+Delete dovy's cache: downloads, builds and the build sandbox. They are
+fetched or built again when needed. The local repository and the logs are
+not touched.
 .SH OPTIONS
 .TP
 .B \-\-help
@@ -96,6 +112,10 @@ The catalog: a git clone of the newest trusted release
 .I ~/.cache/dovy
 Downloads, builds and the build sandbox
 .RB ( $XDG_CACHE_HOME/dovy ).
+After a run that succeeds, packages now in the local repository and
+downloads no recipe uses are deleted;
+.B dovy clean
+deletes the rest.
 .TP
 .I /var/lib/dovy/repo
 The local repository of packages dovy built.
@@ -104,7 +124,7 @@ The local repository of packages dovy built.
 dovy's records: the catalog release last used, the run in progress.
 .TP
 .I /var/log/dovy
-One log per run.
+One log per run; the newest 100 are kept.
 .TP
 .I /etc/dovy/keys.d
 Extra trusted catalog keys for this machine, in git's allowed-signers

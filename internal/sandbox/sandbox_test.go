@@ -12,8 +12,7 @@ import (
 const escape = `perl -e 'mkdir "/tmp/x"; chroot("/tmp/x") or die; chdir("..") for 1..64; chroot(".") or die;
 print((-e $ARGV[0]) ? "visible\n" : "hidden\n")' "$SECRET" >/build/result`
 
-// The host's files stay hidden from a build running as root (2.5). Makes a
-// Debian base: needs the network, mmdebstrap and uidmap.
+// Needs the network, mmdebstrap and uidmap.
 func TestHostHidden(t *testing.T) {
 	if os.Getenv("DOVY_TEST_SANDBOX") == "" {
 		t.Skip("set DOVY_TEST_SANDBOX=1")

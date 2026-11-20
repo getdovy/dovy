@@ -6,13 +6,8 @@ import (
 	"github.com/getdovy/dovy/internal/apt"
 )
 
-// follow keeps what apt would remove only because it needs the exact
-// version of a package moving between stable and backports, as
-// firmware-linux-nonfree needs firmware-misc-nonfree's (5.4, 4.6). Toward
-// backports it is asked from backports, so apt takes the dependencies it
-// needs from there too; back to stable, at its stable version, with its
-// own backports dependencies. The plan lists each one; a move apt cannot
-// make leaves the plan as it was, and its removals refused.
+// follow keeps packages apt would remove only because they pin the exact version
+// of a package moving between stable and backports (firmware-linux-nonfree).
 func (t *txn) follow(stubs []string) error {
 	if t.verb == "upgrade" { // Debian's dist-upgrade removes as apt does
 		return nil

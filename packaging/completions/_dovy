@@ -15,6 +15,7 @@ if (( CURRENT == 2 )); then
 		'search:search names and descriptions'
 		'show:details of a recipe'
 		'check:report problems'
+		'clean:delete downloads and builds in your cache'
 	)
 	_describe command cmds
 	return
@@ -24,7 +25,7 @@ installed=(${(f)"$(dpkg-query -W -f '${X-Dovy-Recipe}\t${db:Status-Abbrev}\n' 2>
 	awk -F'\t' '$1 != "" && $1 != "dovy" && $2 ~ /^ii/ { print $1 }' | sort -u)"})
 pool=($dir/*/recipe.toml(N:h:t))
 case $words[2] in
-install) pool=(${pool:|installed}) ;;
+install) (( ${words[(I)--reinstall]} )) && pool=($installed) || pool=(${pool:|installed}) ;;
 remove) pool=($installed) ;;
 show) (( CURRENT == 3 )) || return 1 ;;
 *) return 1 ;;

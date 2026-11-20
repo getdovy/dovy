@@ -14,24 +14,19 @@ import (
 	"syscall"
 )
 
-// URL is where the catalog comes from. Releases are signed tags (ADR 0005).
-// Set at build time for testing: make CATALOG=/path/catalog.bundle.
+// URL is overridden at build time for testing: make CATALOG=/path/catalog.bundle (ADR 0005).
 var URL = "https://github.com/getdovy/dovy-catalog"
 
-// ErrUntrusted: no release is signed by a known key.
 var ErrUntrusted = errors.New("catalog is not signed by a trusted key")
 
-// RecordPath holds the newest release a confirmed operation used,
-// root-owned; release names only increase, so an older one is a rollback.
+// RecordPath is root-owned; release names only increase, so an older one is a rollback.
 var RecordPath = "/var/lib/dovy/catalog-release"
 
-// Recorded reads RecordPath; "" if none.
 func Recorded() string {
 	b, _ := os.ReadFile(RecordPath)
 	return strings.TrimSpace(string(b))
 }
 
-// Older reports whether release a is older than b.
 func Older(a, b string) bool {
 	if a == b || !tagRE.MatchString(a) || !tagRE.MatchString(b) {
 		return false
@@ -46,16 +41,13 @@ func rollback(tag string) error {
 	return nil
 }
 
-// tagRE matches release tags: catalog-YYYY.MM.DD.N.
 var tagRE = regexp.MustCompile(`^catalog-(\d{4})\.(\d{2})\.(\d{2})\.(\d+)$`)
 
-// KeysDir holds keys a machine's owner adds (principles topic 11, rule 2).
 const KeysDir = "/etc/dovy/keys.d"
 
 //go:embed keys/allowed_signers
 var shipped []byte
 
-// Dir is the local copy: $XDG_DATA_HOME/dovy/catalog.
 func Dir() (string, error) {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
@@ -68,8 +60,7 @@ func Dir() (string, error) {
 	return filepath.Join(base, "dovy", "catalog"), nil
 }
 
-// Signers returns the shipped keys plus those in keysDir. Files not owned by
-// root, or writable by anyone else, are skipped and reported to warn.
+// Signers skips key files not owned by root or writable by others.
 func Signers(keysDir string, warn func(string)) []byte {
 	out := append([]byte{}, shipped...)
 	files, _ := filepath.Glob(filepath.Join(keysDir, "*"))
@@ -94,8 +85,7 @@ func Signers(keysDir string, warn func(string)) []byte {
 	return out
 }
 
-// git runs git without the user's or system's config, so nothing there can
-// change how signatures are checked.
+// git ignores the user's and system's config, so nothing there can change how signatures are checked.
 func git(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
@@ -106,7 +96,6 @@ func git(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// verifyTag checks tag is signed by one of signers.
 func verifyTag(dir, tag string, signers []byte) error {
 	f, err := os.CreateTemp("", "dovy-signers-")
 	if err != nil {
@@ -123,7 +112,6 @@ func verifyTag(dir, tag string, signers []byte) error {
 	return nil
 }
 
-// Tag is the release tag the local copy is on.
 func Tag(dir string) (string, error) {
 	out, err := git(dir, "tag", "-l", "catalog-*")
 	if err != nil {
@@ -136,8 +124,6 @@ func Tag(dir string) (string, error) {
 	return tags[0], nil
 }
 
-// Verify checks the local copy on every run (specs/catalog.md): it sits on
-// a release tag signed by a trusted key and the files match it exactly.
 func Verify(dir string, signers []byte) error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return errors.New("no catalog yet")
@@ -169,21 +155,17 @@ func Verify(dir string, signers []byte) error {
 	return checkMinimum(dir, tag)
 }
 
-// Change is one recipe version change.
 type Change struct{ Name, Old, New string }
 
-// Skip is a newer release update passed over, and why.
 type Skip struct{ Tag, Why string }
 
-// Changes is what update brought.
 type Changes struct {
-	Tag            string // release now in use
+	Tag            string
 	Skipped        []Skip // newer releases not used: untrusted, or needing a newer dovy
 	Added, Dropped []string
 	Updated        []Change
 }
 
-// tags lists release tags at url, newest first.
 func tags(parent, url string) ([]string, error) {
 	out, err := git(parent, "ls-remote", "--tags", "--refs", url, "catalog-*")
 	if err != nil {
@@ -198,7 +180,6 @@ func tags(parent, url string) ([]string, error) {
 	return newestFirst(ts), nil
 }
 
-// newestFirst keeps release tag names and orders them newest first.
 func newestFirst(names []string) []string {
 	var ts []string
 	for _, n := range names {
@@ -225,9 +206,7 @@ func newestFirst(names []string) []string {
 	return ts
 }
 
-// Update fetches the newest release tag at url whose signature verifies into
-// a new copy, checks its recipes there, and only then swaps it in. A failure
-// leaves the old copy as it was.
+// Update checks the new copy before swapping it in; a failure leaves the old copy as it was.
 func Update(dir, url string, signers []byte) (Changes, error) {
 	parent := filepath.Dir(dir)
 	work, old := dir+".new", dir+".old"
@@ -260,7 +239,7 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 			c.Skipped = append(c.Skipped, Skip{t, "not signed by a trusted key"})
 			continue
 		}
-		// catalog.toml, read from the tag before anything is checked out (ADR 0023).
+		// Read from the tag before anything is checked out (ADR 0023).
 		b, err := git(work, "show", t+":"+MinimumFile)
 		if err != nil {
 			c.Skipped = append(c.Skipped, Skip{t, "no " + MinimumFile})
@@ -307,8 +286,6 @@ func Update(dir, url string, signers []byte) (Changes, error) {
 	return c, nil
 }
 
-// Fetch puts release tag from url into dir, a new copy, after checking
-// its signature; for show --diff.
 func Fetch(dir, url, tag string, signers []byte) error {
 	if _, err := git(filepath.Dir(dir), "init", "-q", dir); err != nil {
 		return err
@@ -323,7 +300,7 @@ func Fetch(dir, url, tag string, signers []byte) error {
 	return err
 }
 
-// versions reads name -> version from the recipes on disk, unchecked.
+// versions does not check the recipes.
 func versions(dir string) map[string]string {
 	v := map[string]string{}
 	paths, _ := filepath.Glob(filepath.Join(dir, "recipes", "*", "recipe.toml"))

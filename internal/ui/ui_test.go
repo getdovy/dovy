@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// The golden files are the agreed layouts (dovy-design/mockups) printed
-// with NO_COLOR.
+// The golden files are the agreed layouts (dovy-design/mockups), printed with NO_COLOR.
 func golden(t *testing.T, name string, got string) {
 	t.Helper()
 	if os.Getenv("DOVY_UPDATE_GOLDEN") != "" { // after an agreed change of layout

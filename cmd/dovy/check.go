@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,8 +14,7 @@ import (
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// check reports and changes nothing (8.6): one OK or Problem line per
-// check, with the fix (12.8).
+// check only reports; it changes nothing.
 func (a *app) check() int {
 	problems := 0
 	ok := func(what string) { a.out.Say(ui.Green, "OK:", what) }
@@ -32,6 +32,7 @@ func (a *app) check() int {
 	} else {
 		tag, _ := catalog.Tag(a.dir)
 		ok("catalog " + tag + " signed by a trusted key")
+		localInputs(rs)
 	}
 
 	if j, err := state.Unfinished(state.Dir); err != nil || j != nil {
@@ -56,8 +57,8 @@ func (a *app) check() int {
 		}
 	}
 	sort.Strings(ours)
-	// A vendor's package runs the vendor's scripts (2.6), which may rewrite
-	// its files: reported, not a problem.
+	// A vendor's package runs the vendor's scripts, which may rewrite its files:
+	// reported, not a problem.
 	var vendor []string
 	for _, p := range ours {
 		if r := rs[inst[p].Recipe]; r != nil && (build.IsDeb(r) || r.Repo != nil && r.Repo.Repack) {
@@ -77,7 +78,7 @@ func (a *app) check() int {
 		}
 	}
 	if len(byHand) > 0 {
-		bad("dovy's files changed by hand: "+brief(byHand), "reinstall the recipe: dovy remove <recipe>, then dovy install <recipe>")
+		bad("dovy's files changed by hand: "+brief(byHand), "dovy install --reinstall <recipe>")
 	} else {
 		ok(fmt.Sprintf("files of %d dovy %s as installed", len(ours), plural(len(ours), "package")))
 	}
@@ -85,7 +86,7 @@ func (a *app) check() int {
 		a.out.Say(ui.Dim, "Note:", fmt.Sprintf("%d files changed by vendor packages' own scripts: %s", len(theirs), brief(theirs)))
 	}
 	if len(edited) > 0 {
-		a.out.Say(ui.Dim, "Kept:", "edited config files: "+strings.Join(edited, ", ")+" (8.5)")
+		a.out.Say(ui.Dim, "Kept:", "edited config files: "+strings.Join(edited, ", ")+" (8.5); dovy's version back: dovy install --reinstall --restore-config <recipe>")
 	}
 
 	if d := duplicates(); len(d) > 0 {
@@ -102,7 +103,8 @@ func (a *app) check() int {
 			if i.Recipe == "" || r == nil {
 				continue
 			}
-			if why := unavailable(r, rs); why != "" {
+			// A local-build's folder may go: what it installed stays.
+			if why := unavailable(r, rs); why != "" && r.Kind != catalog.LocalBuild {
 				hw = append(hw, i.Recipe+" ("+why+")")
 			}
 			if !supports(r, release) {
@@ -122,13 +124,72 @@ func (a *app) check() int {
 			ok(fmt.Sprintf("installed recipes support Debian %d", release))
 		}
 	}
+	if fontsMS(inst) {
+		if dirs := unstripped(fontList()); len(dirs) > 0 {
+			folder := "~/Downloads/fonts-ms"
+			if r := rs["fonts-windows"]; r != nil && r.Local != nil {
+				folder = r.Local.Path
+			}
+			bad("Microsoft fonts whose Arabic is too small, outside dovy: "+brief(dirs),
+				"move them to "+folder+", then: dovy install fonts-windows (or dovy upgrade when it is installed)")
+		} else {
+			ok("Microsoft fonts: none with their small Arabic")
+		}
+	}
 	if problems > 0 {
 		return exitFailed
 	}
 	return exitOK
 }
 
-// brief lists at most five names, then how many more.
+// smallArabic are the families whose Arabic fonts-windows strips; keep in sync
+// with its build.sh.
+var smallArabic = map[string]bool{"Arial": true, "Times New Roman": true, "Courier New": true, "Calibri": true,
+	"Microsoft Sans Serif": true, "Tahoma": true, "Segoe UI": true}
+
+// Microsoft fonts are dovy's to check only with fonts-ms or fonts-windows installed.
+func fontsMS(inst map[string]pkgInfo) bool {
+	for _, i := range inst {
+		if i.Recipe == "fonts-ms" || i.Recipe == "fonts-windows" {
+			return true
+		}
+	}
+	return false
+}
+
+// fontList lines are "file\tfamilies\tlanguages"; fonts that fonts-ms hides are
+// not listed.
+func fontList() string {
+	out, _ := exec.Command("fc-list", "-f", "%{file}\t%{family}\t%{lang}\n").Output()
+	return string(out)
+}
+
+// Collections (.ttc) are skipped: fonts-windows does not strip them either.
+func unstripped(list string) []string {
+	seen := map[string]bool{}
+	var dirs []string
+	for _, l := range strings.Split(list, "\n") {
+		f := strings.Split(l, "\t")
+		if len(f) != 3 || strings.HasSuffix(strings.ToLower(f[0]), ".ttc") {
+			continue
+		}
+		ours := false
+		for _, fam := range strings.Split(f[1], ",") {
+			ours = ours || smallArabic[fam]
+		}
+		hasAr := false
+		for _, lang := range strings.Split(f[2], "|") {
+			hasAr = hasAr || lang == "ar"
+		}
+		if d := filepath.Dir(f[0]); ours && hasAr && !seen[d] {
+			seen[d] = true
+			dirs = append(dirs, d)
+		}
+	}
+	sort.Strings(dirs)
+	return dirs
+}
+
 func brief(s []string) string {
 	if len(s) <= 5 {
 		return strings.Join(s, ", ")
@@ -136,8 +197,7 @@ func brief(s []string) string {
 	return fmt.Sprintf("%s, and %d more", strings.Join(s[:5], ", "), len(s)-5)
 }
 
-// verify runs dpkg --verify: files changed by hand, and edited conffiles
-// (kept by design).
+// Edited conffiles are returned apart: they are kept by design.
 func verify(pkgs []string) (altered, edited []string) {
 	if len(pkgs) == 0 {
 		return nil, nil

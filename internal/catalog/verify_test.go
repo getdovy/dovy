@@ -8,8 +8,7 @@ import (
 	"testing"
 )
 
-// fixture returns a test catalog bundle (v1, v2, mixed, bad) and its trusted
-// key, made by testdata/make-fixture.sh.
+// fixture's bundle (v1, v2, mixed, bad) and key are made by testdata/make-fixture.sh.
 func fixture(t *testing.T, name string) (bundle string, signers []byte) {
 	t.Helper()
 	bundle, _ = filepath.Abs("testdata/catalog-" + name + ".bundle")

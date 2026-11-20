@@ -14,8 +14,8 @@ import (
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// upgrade is one plan for everything (topic 7): the catalog, dovy's
-// packages, and Debian's dist-upgrade with its removals shown.
+// upgrade is one plan for the catalog, dovy's packages and Debian's
+// dist-upgrade, removals shown.
 func (a *app) upgrade() int {
 	if code := a.unfinished(); code != exitOK {
 		return code
@@ -59,8 +59,7 @@ func (a *app) upgrade() int {
 		return exitFailed
 	}
 
-	// Installed recipes: rebuilt when their version changes (7.4, 7.8);
-	// what cannot be upgraded is said, with what to do (7.5, 7.6, 6.7).
+	// What cannot be upgraded is reported with what to do.
 	needs := map[string][]string{}
 	using := map[string]bool{}
 	add := func(r *catalog.Recipe) {
@@ -70,7 +69,7 @@ func (a *app) upgrade() int {
 		t.build = append(t.build, x)
 		t.versions[r.Package()] = deb.Version(r, release)
 	}
-	// dovy first, alone (9.4): the new dovy plans the rest after a restart.
+	// dovy first, alone: the new dovy plans the rest after a restart.
 	if r := rs["dovy"]; r != nil && byRecipe["dovy"] != "" && supports(r, release) &&
 		apt.Compare(deb.Version(r, release), inst[byRecipe["dovy"]].Version) > 0 {
 		if os.Getenv(Restarted) != "" { // upgraded and restarted, yet still old: never loop
@@ -93,6 +92,10 @@ func (a *app) upgrade() int {
 			continue
 		case !supports(r, release):
 			t.notices = append(t.notices, ui.Pair{Item: name, Reason: fmt.Sprintf("not built for Debian %d; kept as is until the recipe supports it, or: dovy remove %s", release, name)})
+			continue
+		}
+		if r.Kind == catalog.LocalBuild && r.Input == "" { // its folder is gone or empty
+			t.notices = append(t.notices, ui.Pair{Item: name, Reason: "no " + strings.Join(r.Local.Match, ", ") + " files in " + r.Local.Path + ": kept as installed"})
 			continue
 		}
 		if why := unavailable(r, rs); why != "" {
@@ -128,8 +131,7 @@ func (a *app) upgrade() int {
 		if inst[byRecipe[name]].Version != deb.Version(r, release) {
 			add(r)
 		}
-		// A bundle's new members and a recipe's new dependencies come with
-		// it (6.8), and theirs in turn; pairs stand.
+		// New members and dependencies come with it, recursively; pairs stand.
 		next := append(append([]string{}, r.Members...), r.Depends...)
 		for len(next) > 0 {
 			m := next[0]
@@ -159,8 +161,8 @@ func (a *app) upgrade() int {
 		}
 	}
 
-	// Capabilities and repositories: content and keys checked again
-	// (2.4, 8.5); a change rebuilds them.
+	// Capability content and repository keys are checked again; a change
+	// rebuilds them.
 	sim := newSimConfig()
 	if err := t.capabilities(needs, codename, sim); err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy upgrade", "")
@@ -190,7 +192,7 @@ func (a *app) upgrade() int {
 		}
 	}
 
-	// Debian's dist-upgrade, as requests in the one transaction (7.2).
+	// Debian's dist-upgrade goes into the same transaction.
 	if code := t.distUpgrade(a); code != exitOK {
 		return code
 	}
@@ -202,9 +204,7 @@ func (a *app) upgrade() int {
 	return a.run(t)
 }
 
-// distUpgrade adds apt's dist-upgrade to t: upgrades and new packages as
-// pkg=version, removals as pkg- with their reason. It never removes dovy's
-// own packages.
+// distUpgrade never removes dovy's own packages.
 func (t *txn) distUpgrade(a *app) int {
 	out, err := apt.Simulate(t.opts, "dist-upgrade")
 	if err != nil {
@@ -223,7 +223,6 @@ func (t *txn) distUpgrade(a *app) int {
 	return exitOK
 }
 
-// upgradeRequests turns a dist-upgrade simulation into install arguments.
 func upgradeRequests(as []apt.Action, ours map[string]string, inst map[string]pkgInfo) (reqs []string, removing map[string]string, dovy []string) {
 	removing = map[string]string{}
 	for _, x := range as {
@@ -245,7 +244,6 @@ func upgradeRequests(as []apt.Action, ours map[string]string, inst map[string]pk
 	return reqs, removing, dovy
 }
 
-// showNotices prints what needs the user after a run (12.4).
 func (a *app) showNotices(n []ui.Pair) {
 	if len(n) == 0 {
 		return

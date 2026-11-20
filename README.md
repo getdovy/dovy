@@ -59,6 +59,7 @@ dovy remove firefox         # plan, confirm, remove
 | Command | Does |
 |---|---|
 | `install <recipe>...` | plan, confirm, install, with the recipes they depend on |
+| `install --reinstall [--restore-config] <recipe>...` | install again what is installed; `--restore-config` also brings back dovy's config files (yours kept as `*.dpkg-old`) |
 | `remove <recipe>...` | plan, confirm, remove; Debian packages a recipe replaced come back |
 | `update` | fetch the newest trusted catalog release; changes nothing |
 | `upgrade` | dovy first if it is outdated, then installed recipes and Debian's own upgrade, in one plan |
@@ -66,6 +67,7 @@ dovy remove firefox         # plan, confirm, remove
 | `search <word>` | recipes by name and description |
 | `show <recipe> [--recipe \| --diff]` | details, the recipe itself, or what changed since install |
 | `check` | report problems; changes nothing |
+| `clean` | delete dovy's downloads and builds in `~/.cache/dovy`; they come back when needed |
 
 `man dovy` has the rest.
 
@@ -93,8 +95,9 @@ dovy remove <recipe>...
 sudo apt purge dovy
 ```
 
-`purge` also removes dovy's records and logs. Your catalog copy and
-downloads stay in `~/.local/share/dovy` and `~/.cache/dovy`.
+`purge` also removes dovy's records and logs. Your catalog copy stays in
+`~/.local/share/dovy`; run `dovy clean` before the purge to delete the
+downloads and builds in `~/.cache/dovy`.
 
 ## Limits
 

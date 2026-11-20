@@ -1,5 +1,5 @@
 #!/bin/sh
-# dovy's repository index: written once, then kept by dovy (specs/package.md).
+# The repository index is written once, then kept by dovy.
 set -e
 if [ "$1" = configure ]; then
 	repo=/var/lib/dovy/repo

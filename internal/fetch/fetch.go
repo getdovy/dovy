@@ -1,5 +1,4 @@
-// Package fetch downloads recipe sources and checks their sha256
-// (principles 2.4).
+// Package fetch downloads recipe sources and checks their sha256.
 package fetch
 
 import (
@@ -17,11 +16,9 @@ import (
 	"time"
 )
 
-// Stall is how long a download may go without a byte.
 var Stall = time.Minute
 
-// Client is used for downloads; tests replace it. No overall timeout: a
-// large file on a slow line is fine, a stalled one is not (see Stall).
+// Client has no overall timeout: a slow large file is fine, a stalled one is not (see Stall).
 var Client = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -33,7 +30,6 @@ var Client = &http.Client{
 	CheckRedirect: httpsOnly,
 }
 
-// httpsOnly refuses a redirect that leaves HTTPS.
 func httpsOnly(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != "https" {
 		return fmt.Errorf("redirect to %s: https only", req.URL.Redacted())
@@ -44,11 +40,9 @@ func httpsOnly(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// Progress, when set, is told how much of url has arrived; total is -1
-// when the server does not say.
+// Progress: total is -1 when the server does not say.
 var Progress func(url string, got, total int64)
 
-// counter reports what is written through it.
 type counter struct {
 	url        string
 	got, total int64
@@ -62,7 +56,6 @@ func (c *counter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// get starts a GET that is cancelled when no byte arrives for Stall.
 func get(url string) (*http.Response, io.Reader, func(), error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -93,8 +86,7 @@ type readerFunc func([]byte) (int, error)
 
 func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
-// Get returns the path of url's file in dir, named by its sha256.
-// A cached file is used when its hash matches; a mismatch removes the file.
+// Get names files by sha256; a cached file with a wrong hash is removed.
 func Get(url, sum, dir string) (string, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf("%s: https only", url)
@@ -146,7 +138,7 @@ func hashOf(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Size asks the server for url's size; -1 when it does not say in time.
+// Size is -1 when the server does not say in time.
 func Size(url string) int64 {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -165,8 +157,7 @@ func Size(url string) int64 {
 	return resp.ContentLength
 }
 
-// Bytes downloads a small file over HTTPS, at most limit bytes; for keys,
-// checked by fingerprint rather than sha256 (2.4).
+// Bytes is for keys, which are checked by fingerprint rather than sha256.
 func Bytes(url string, limit int64) ([]byte, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("%s: https only", url)
