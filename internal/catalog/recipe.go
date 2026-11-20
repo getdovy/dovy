@@ -1,5 +1,4 @@
-// Package catalog reads, checks and verifies the recipe catalog
-// (dovy-catalog docs/recipe-format.md; dovy-design specs/catalog.md).
+// Package catalog reads, checks and verifies the recipe catalog.
 package catalog
 
 import (
@@ -16,17 +15,16 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Kinds.
 const (
 	UpstreamBuild    = "upstream-build"
 	UpstreamBinary   = "upstream-binary"
 	VendorRepository = "vendor-repository"
 	TestingRebuild   = "testing-rebuild"
+	LocalBuild       = "local-build" // built from files in the user's home
 	Setup            = "setup"
 	Bundle           = "bundle"
 )
 
-// Releases dovy supports, capabilities, and hardware checks built in.
 var (
 	releases     = map[int]bool{13: true}
 	capabilities = map[string]bool{"i386": true, "components": true, "backports": true}
@@ -38,8 +36,7 @@ type Source struct {
 	SHA256 string `toml:"sha256"`
 }
 
-// Repository is one repositories/<name>.toml: a vendor's apt repository,
-// shared by the recipes that name it (ADR 0013).
+// Repository is shared by the recipes that name it (ADR 0013).
 type Repository struct {
 	Name         string   `toml:"name"`
 	URI          string   `toml:"uri"`
@@ -48,23 +45,26 @@ type Repository struct {
 	KeyURL       string   `toml:"key-url"`
 	Fingerprints []string `toml:"fingerprints"`
 	Maintainer   string   `toml:"maintainer"`
-	Repack       bool     `toml:"repack"` // never given to apt; packages repacked (ADR 0014)
-	Pin          *bool    `toml:"pin"`    // false: not pinned (NVIDIA, ADR 0017)
+	Repack       bool     `toml:"repack"` // never added to apt; packages repacked (ADR 0014)
+	Pin          *bool    `toml:"pin"`    // only false is allowed (NVIDIA, ADR 0017)
 	Files        []File   `toml:"file"`
 }
 
-// Pinned reports whether the repository is pinned to its recipes' packages.
 func (q *Repository) Pinned() bool { return q.Pin == nil || *q.Pin }
 
-// Flat reports a flat repository: the suite is a path, with no components.
+// Flat reports an apt flat repository: the suite is a path, with no components.
 func (q *Repository) Flat() bool { return strings.HasSuffix(q.Suite, "/") }
+
+type Local struct {
+	Path  string   `toml:"path"`  // "~/..."
+	Match []string `toml:"match"` // file name patterns
+}
 
 type File struct {
 	Path    string `toml:"path"`
 	Content string `toml:"content"`
 }
 
-// Recipe is one recipes/<name>/recipe.toml.
 type Recipe struct {
 	Name        string   `toml:"name"`
 	Description string   `toml:"description"`
@@ -85,26 +85,35 @@ type Recipe struct {
 
 	Sources       []Source          `toml:"source"`
 	Install       map[string]string `toml:"install"`
-	Links         map[string]string `toml:"links"` // installed link -> what it points to
+	Links         map[string]string `toml:"links"` // link -> target
 	Scripts       map[string]string `toml:"scripts"`
 	Repository    string            `toml:"repository"`
-	Repo          *Repository       `toml:"-"` // the repository it names
+	Repo          *Repository       `toml:"-"`
 	SourcePackage string            `toml:"source-package"`
 	Packages      []string          `toml:"packages"`
 	Backports     bool              `toml:"backports"`
 	Files         []File            `toml:"file"`
 	Members       []string          `toml:"members"`
 	BuildDepends  []string          `toml:"build-depends"`
+	Local         *Local            `toml:"local"`
 
-	HasBuild   bool     `toml:"-"` // build.sh present
-	Dir        string   `toml:"-"` // the recipe's folder
+	HasBuild   bool     `toml:"-"`
+	Dir        string   `toml:"-"`
 	Replaced   []string `toml:"-"` // set at install: "pkg manual|auto" (ADR 0016)
 	Release    string   `toml:"-"` // catalog release it is built from
 	Recommends []string `toml:"-"` // a bundle's member packages
+	Input      string   `toml:"-"` // local-build: last change of its files, UTC YYYYMMDDhhmmss
 }
 
-// PinFile is the pin that keeps a same-name replacement on dovy's version
-// (principles 7.3), or "" when r replaces no package of its own name.
+// Upstream appends Input (1+20261120153000) so changed local files make a newer version.
+func (r *Recipe) Upstream() string {
+	if r.Input != "" {
+		return r.Version + "+" + r.Input
+	}
+	return r.Version
+}
+
+// PinFile keeps a same-name replacement on dovy's version; "" when r replaces no package of its name.
 func (r *Recipe) PinFile() (path, content string) {
 	for _, p := range r.Replaces {
 		if p == r.Package() {
@@ -115,14 +124,13 @@ func (r *Recipe) PinFile() (path, content string) {
 	return "", ""
 }
 
-// Package is the name of the .deb dovy builds for r: software keeps its
-// upstream name; setup, repository and bundle packages are dovy-<name>.
+// Package keeps software's upstream name; setup, repository and bundle packages are dovy-<name>.
 func (r *Recipe) Package() string {
 	switch r.Kind {
-	case UpstreamBuild, UpstreamBinary, TestingRebuild:
+	case UpstreamBuild, UpstreamBinary, TestingRebuild, LocalBuild:
 		return r.Name
 	case VendorRepository:
-		if r.Repo != nil && r.Repo.Repack { // the vendor's package, repacked
+		if r.Repo != nil && r.Repo.Repack {
 			return r.Name
 		}
 	}
@@ -132,11 +140,9 @@ func (r *Recipe) Package() string {
 	return "dovy-" + r.Name
 }
 
-// Rev is the package revision (ADR 0010).
 func (r *Recipe) Rev() int { return max(r.Revision, 1) }
 
-// Needs is the capabilities r requires, stated or implied: backports by
-// `backports = true`, i386 by any :i386 package.
+// Needs includes implied capabilities: backports by `backports = true`, i386 by any :i386 package.
 func (r *Recipe) Needs() []string {
 	need := map[string]bool{}
 	for _, c := range r.Requires {
@@ -153,8 +159,7 @@ func (r *Recipe) Needs() []string {
 	return sorted(need)
 }
 
-// scriptNames a recipe may replace; config and templates may only be
-// dropped, with their package's debconf questions.
+// scriptNames: config and templates may only be dropped, with their package's debconf questions.
 var scriptNames = map[string]bool{"preinst": true, "postinst": true, "prerm": true, "postrm": true, "config": true, "templates": true}
 
 var (
@@ -164,11 +169,9 @@ var (
 	fprRe  = regexp.MustCompile(`^([0-9A-F]{40}|[0-9A-F]{64})$`)
 )
 
-// DebianHas reports which of names are Debian stable packages.
 type DebianHas func(names []string) (map[string]bool, error)
 
-// Load reads and checks every recipe under dir/recipes. Any problem refuses
-// the whole catalog; the error lists all of them.
+// Load refuses the whole catalog on any problem; the error lists all of them.
 func Load(dir string, debian DebianHas) (map[string]*Recipe, error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "recipes", "*", "recipe.toml"))
 	if err != nil {
@@ -201,7 +204,7 @@ func Load(dir string, debian DebianHas) (map[string]*Recipe, error) {
 				errs = append(errs, fmt.Errorf("%s: no repository %q", name, r.Repository))
 			case r.Repo.Repack && len(r.Packages) == 0:
 				errs = append(errs, fmt.Errorf("%s: a repacked repository's recipe names its own package first", name))
-			case r.Repo.Repack && r.Packages[0] != r.Name: // any after it: Debian packages it needs
+			case r.Repo.Repack && r.Packages[0] != r.Name: // later entries are Debian packages it needs
 				errs = append(errs, fmt.Errorf("%s: repacked package %q must be the recipe's name", name, r.Packages[0]))
 			case !r.Repo.Repack && len(r.Scripts) > 0:
 				errs = append(errs, fmt.Errorf("%s: scripts: only for a repacked repository (ADR 0014)", name))
@@ -237,7 +240,6 @@ func parse(path string) (*Recipe, error) {
 	return r, nil
 }
 
-// check runs the checks that need only the recipe itself.
 func check(r *Recipe) []string {
 	var p []string
 	add := func(f string, a ...any) { p = append(p, fmt.Sprintf(f, a...)) }
@@ -293,7 +295,7 @@ func check(r *Recipe) []string {
 			add("install %s: source %q must be relative, without ..", dst, src)
 		}
 	}
-	for _, l := range sorted(r.Links) { // to a file the recipe installs
+	for _, l := range sorted(r.Links) {
 		t := r.Links[l]
 		if !strings.HasPrefix(l, "/usr/") || filepath.Clean(l) != l {
 			add("links %s: an absolute path under /usr/", l)
@@ -320,7 +322,7 @@ func check(r *Recipe) []string {
 		add("scripts: not with several vendor packages (ADR 0018)")
 	}
 	for _, f := range r.Files {
-		if r.Kind == UpstreamBinary { // a vendor .deb's own scripts read it (2.6)
+		if r.Kind == UpstreamBinary { // a vendor .deb's own scripts read it
 			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) || len(r.Sources) != 1 || !strings.HasSuffix(r.Sources[0].URL, ".deb") {
 				add("file %s: only /etc/default/<name>, for one vendor .deb", f.Path)
 			}
@@ -335,7 +337,6 @@ func check(r *Recipe) []string {
 		}
 	}
 
-	// What each kind needs, and what it may not carry.
 	has := map[string]bool{
 		"source":         len(r.Sources) > 0,
 		"install":        len(r.Install) > 0,
@@ -349,6 +350,7 @@ func check(r *Recipe) []string {
 		"members":        len(r.Members) > 0,
 		"build.sh":       r.HasBuild,
 		"build-depends":  len(r.BuildDepends) > 0,
+		"local":          r.Local != nil,
 	}
 	allowed := map[string][]string{
 		UpstreamBuild:    {"source", "build.sh", "build-depends", "packages", "scripts"},
@@ -356,7 +358,8 @@ func check(r *Recipe) []string {
 		VendorRepository: {"repository", "packages", "scripts"},
 		TestingRebuild:   {"source-package", "source", "build.sh", "packages"},
 		Setup:            {"packages", "backports", "file", "scripts"},
-		Bundle:           {"members"},
+		LocalBuild:       {"local", "build.sh", "build-depends", "packages"},
+		Bundle:           {"members", "packages"}, // packages: Debian's, as the bundle's own Depends
 	}
 	ok, known := allowed[r.Kind]
 	if !known {
@@ -388,7 +391,7 @@ func check(r *Recipe) []string {
 				debs++
 			}
 		}
-		if debs > 0 && debs != len(r.Sources) { // several packages (ADR 0018): .debs only
+		if debs > 0 && debs != len(r.Sources) { // several packages come as .debs only (ADR 0018)
 			add("source: .deb sources cannot mix with tarballs")
 		}
 		if debs > 0 && has["install"] {
@@ -407,6 +410,27 @@ func check(r *Recipe) []string {
 		} else if b := path.Base(r.Sources[0].URL); !strings.HasPrefix(b, r.SourcePackage+"_"+r.Version+"-") {
 			add("source %s: expected %s_%s-<debian revision>.dsc", b, r.SourcePackage, r.Version)
 		}
+	case LocalBuild:
+		if !has["local"] || !has["build.sh"] {
+			add("local-build needs [local] and build.sh")
+		}
+		if r.Network != "" {
+			add("network: a local-build runs without the network")
+		}
+		if l := r.Local; l != nil {
+			rel, ok := strings.CutPrefix(l.Path, "~/")
+			if !ok || rel == "" || path.Clean(rel) != rel || rel == ".." || strings.HasPrefix(rel, "../") {
+				add("local path %q: a folder under the home, ~/...", l.Path)
+			}
+			if len(l.Match) == 0 {
+				add("local: match names the files taken")
+			}
+			for _, m := range l.Match {
+				if _, err := path.Match(m, ""); err != nil || m == "" || strings.Contains(m, "/") {
+					add("local match %q: a file name pattern", m)
+				}
+			}
+		}
 	case Setup:
 		if !has["packages"] && !has["file"] {
 			add("setup needs packages or [[file]]")
@@ -422,7 +446,6 @@ func check(r *Recipe) []string {
 	return p
 }
 
-// dropIn: an absolute path under /etc inside a *.d folder, no "..".
 func dropIn(p string) bool {
 	if !strings.HasPrefix(p, "/etc/") || filepath.Clean(p) != p {
 		return false
@@ -440,7 +463,6 @@ func dropIn(p string) bool {
 	return false
 }
 
-// crossCheck: references exist, conflicts go both ways, no dependency cycles.
 func crossCheck(rs map[string]*Recipe) []error {
 	var errs []error
 	ref := func(from, field, to string) {
@@ -490,7 +512,6 @@ func crossCheck(rs map[string]*Recipe) []error {
 	return errs
 }
 
-// checkReplaces: a package name Debian already uses must be in replaces.
 func checkReplaces(rs map[string]*Recipe, debian DebianHas) []error {
 	var names []string
 	for _, n := range sorted(rs) {
@@ -529,11 +550,10 @@ func sorted[V any](m map[string]V) []string {
 	return k
 }
 
-// loadRepositories reads and checks repositories/*.toml (ADR 0013).
 func loadRepositories(dir string) (map[string]*Repository, []error) {
 	paths, _ := filepath.Glob(filepath.Join(dir, "repositories", "*.toml"))
 	repos := map[string]*Repository{}
-	hosts := map[string]string{} // one repository per host (5.10)
+	hosts := map[string]string{} // one repository per host
 	var errs []error
 	for _, p := range paths {
 		base := strings.TrimSuffix(filepath.Base(p), ".toml")
@@ -578,7 +598,7 @@ func loadRepositories(dir string) (map[string]*Repository, []error) {
 			}
 		}
 		for _, f := range q.Files {
-			// Only to configure the vendor's own scripts (2.6).
+			// Only to configure the vendor's own scripts.
 			if d, name := filepath.Split(f.Path); d != "/etc/default/" || !nameRe.MatchString(name) {
 				add("file %s: only /etc/default/<name>", f.Path)
 			}

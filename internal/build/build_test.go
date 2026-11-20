@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/getdovy/dovy/internal/catalog"
@@ -32,8 +33,8 @@ sha256 = "1816aa30f763856403b1a4d91f73ffd79e96d3a0a5cef6f305f025253f6a3a6c"
 "/usr/bin/pfetch" = "pfetch"
 `
 
-// TestPfetch is milestone 2's proof. It downloads, uses sudo and writes
-// /var/lib/dovy/repo: run only in a disposable Debian 13 system.
+// TestPfetch downloads, uses sudo and writes /var/lib/dovy/repo: run only in a
+// disposable Debian 13 system.
 func TestPfetch(t *testing.T) {
 	if os.Getenv("DOVY_INTEGRATION") != "1" {
 		t.Skip("set DOVY_INTEGRATION=1 in a disposable Debian 13 system")
@@ -210,7 +211,6 @@ func TestReadDepends(t *testing.T) {
 	}
 }
 
-// fakeDeb builds a .deb for pkg and caches it as a recipe source.
 func fakeDeb(t *testing.T, cache, pkg string) catalog.Source {
 	t.Helper()
 	dir := t.TempDir()
@@ -311,5 +311,39 @@ func TestRepackDepends(t *testing.T) {
 	}
 	if dep, _ := exec.Command("dpkg-deb", "-f", d, "Depends").Output(); strings.TrimSpace(string(dep)) != "libnss3, libgbm1" {
 		t.Errorf("Depends: %s", dep)
+	}
+}
+
+func TestLocalFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	r := &catalog.Recipe{Name: "fonts-windows", Kind: catalog.LocalBuild, Local: &catalog.Local{Path: "~/Downloads/fonts-ms", Match: []string{"*.ttf", "*.otf"}}}
+	if root, files, stamp, err := LocalFiles(r); err != nil || len(files) != 0 || stamp != "" || root != filepath.Join(home, "Downloads/fonts-ms") {
+		t.Fatalf("no folder: %q %v %q %v", root, files, stamp, err)
+	}
+	dir := filepath.Join(home, "Downloads", "fonts-ms")
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	t0 := time.Date(2026, 11, 20, 15, 30, 0, 0, time.UTC)
+	for i, n := range []string{"arial.ttf", "SEGOEUI.TTF", "sub/aptos.otf", "readme.txt"} {
+		p := filepath.Join(dir, n)
+		os.WriteFile(p, []byte(n), 0o644)
+		os.Chtimes(p, t0, t0.Add(time.Duration(i)*time.Minute))
+	}
+	os.Symlink(filepath.Join(dir, "arial.ttf"), filepath.Join(dir, "link.ttf")) // not taken
+	for _, d := range []string{filepath.Join(dir, "sub"), dir} {
+		os.Chtimes(d, t0, t0)
+	}
+	_, files, stamp, err := LocalFiles(r)
+	if err != nil || strings.Join(files, " ") != "SEGOEUI.TTF arial.ttf sub/aptos.otf" {
+		t.Fatalf("files %v %v", files, err)
+	}
+	if stamp != "20261120153200" { // aptos.otf, the newest taken; readme.txt does not count
+		t.Errorf("stamp %q", stamp)
+	}
+	// Removing a file changes its folder: the stamp moves on.
+	os.Remove(filepath.Join(dir, "sub", "aptos.otf"))
+	os.Chtimes(filepath.Join(dir, "sub"), t0, t0.Add(time.Hour))
+	if _, files, stamp, _ := LocalFiles(r); len(files) != 2 || stamp != "20261120163000" {
+		t.Errorf("after removal: %v %q", files, stamp)
 	}
 }

@@ -22,7 +22,6 @@ url = "https://example.org/steam.tar.gz"
 sha256 = "` + sha + `"
 `
 
-// catalogDir writes recipes (name -> recipe.toml) into a temporary catalog.
 func catalogDir(t *testing.T, recipes map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -38,7 +37,7 @@ func catalogDir(t *testing.T, recipes map[string]string) string {
 	return dir
 }
 
-// top adds top-level fields to steam, before its [[source]] table.
+// top inserts before [[source]], where TOML fields are still top-level.
 func top(extra string) string { return strings.Replace(steam, "\n[[source]]", extra+"\n[[source]]", 1) }
 
 func noDebian(names []string) (map[string]bool, error) { return map[string]bool{}, nil }
@@ -240,5 +239,65 @@ func TestLinks(t *testing.T) {
 	}
 	if _, err := Load(catalogDir(t, map[string]string{"zig": z + "\"/usr/bin/zig\" = \"/etc/passwd\"\n"}), noDebian); err == nil || !strings.Contains(err.Error(), "not installed by the recipe") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestLocalBuild(t *testing.T) {
+	body := "name = \"fonts-windows\"\ndescription = \"Windows fonts\"\nkind = \"local-build\"\nversion = \"1\"\nmaintainer = \"t\"\ndebian = [13]\n" +
+		"build-depends = [\"libharfbuzz-bin\"]\npackages = [\"fonts-vazirmatn-variable\"]\n\n[local]\npath = \"~/Downloads/fonts-ms\"\nmatch = [\"*.ttf\", \"*.otf\"]\n"
+	write := func(body string, script bool) string {
+		dir := catalogDir(t, map[string]string{"fonts-windows": body})
+		if script {
+			os.WriteFile(filepath.Join(dir, "recipes", "fonts-windows", "build.sh"), []byte("true\n"), 0o644)
+		}
+		return dir
+	}
+	rs, err := Load(write(body, true), noDebian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rs["fonts-windows"]
+	if r.Package() != "fonts-windows" || r.Local.Path != "~/Downloads/fonts-ms" || r.Upstream() != "1" {
+		t.Errorf("got %+v", r)
+	}
+	r.Input = "20261120153000"
+	if r.Upstream() != "1+20261120153000" {
+		t.Errorf("upstream %q", r.Upstream())
+	}
+	for name, c := range map[string]struct {
+		body   string
+		script bool
+		want   string
+	}{
+		"no build.sh":  {body, false, "local-build needs [local] and build.sh"},
+		"no local":     {strings.Split(body, "\n[local]")[0] + "\n", true, "local-build needs [local] and build.sh"},
+		"absolute":     {strings.Replace(body, "~/Downloads/fonts-ms", "/usr/share/fonts", 1), true, "a folder under the home"},
+		"home itself":  {strings.Replace(body, "~/Downloads/fonts-ms", "~/", 1), true, "a folder under the home"},
+		"outside home": {strings.Replace(body, "~/Downloads/fonts-ms", "~/../root", 1), true, "a folder under the home"},
+		"no match":     {strings.Replace(body, `match = ["*.ttf", "*.otf"]`, "match = []", 1), true, "match names the files"},
+		"match path":   {strings.Replace(body, `"*.otf"`, `"sub/*.otf"`, 1), true, "a file name pattern"},
+		"network":      {strings.Replace(body, "debian = [13]", "debian = [13]\nnetwork = \"fetches\"", 1), true, "runs without the network"},
+		"source":       {body + "\n[[source]]\nurl = \"https://example.org/f.tar.gz\"\nsha256 = \"" + sha + "\"\n", true, "source: not used by kind local-build"},
+		"local setup":  {strings.Replace(body, "local-build", "setup", 1), false, "local: not used by kind setup"},
+	} {
+		if _, err := Load(write(c.body, c.script), noDebian); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+}
+
+func TestBundlePackages(t *testing.T) {
+	body := "name = \"gaming-meta\"\ndescription = \"Gaming\"\nkind = \"bundle\"\nversion = \"1\"\nmaintainer = \"t\"\ndebian = [13]\n" +
+		"members = [\"steam\"]\npackages = [\"libsdl2-mixer-2.0-0\", \"libgif7:i386\"]\n"
+	rs, err := Load(catalogDir(t, map[string]string{"gaming-meta": body, "steam": steam}), noDebian)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := rs["gaming-meta"]; strings.Join(r.Needs(), " ") != "i386" || len(r.Packages) != 2 {
+		t.Errorf("got %+v needs %v", r, r.Needs())
+	}
+	noMembers := strings.Replace(body, "members = [\"steam\"]\n", "", 1)
+	if _, err := Load(catalogDir(t, map[string]string{"gaming-meta": noMembers}), noDebian); err == nil || !strings.Contains(err.Error(), "bundle needs members") {
+		t.Errorf("packages without members: %v", err)
 	}
 }

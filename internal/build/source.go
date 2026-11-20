@@ -3,12 +3,16 @@ package build
 import (
 	"bufio"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/getdovy/dovy/internal/capability"
 	"github.com/getdovy/dovy/internal/catalog"
@@ -18,19 +22,15 @@ import (
 	"github.com/getdovy/dovy/internal/unpack"
 )
 
-// Sourced reports a recipe built from source in the sandbox (ADR 0006).
 func Sourced(r *catalog.Recipe) bool {
-	return r.Kind == catalog.UpstreamBuild || r.Kind == catalog.TestingRebuild
+	return r.Kind == catalog.UpstreamBuild || r.Kind == catalog.TestingRebuild || r.Kind == catalog.LocalBuild
 }
 
-// LogPath is where a source build's output goes.
 func LogPath(cache, name string) string { return filepath.Join(cache, "logs", name+".log") }
 
-// Refresh remakes the sandbox's base before the next source build: set by
-// upgrade (ADR 0015). Layers follow the new base.
+// Refresh remakes the sandbox base before the next source build; set by upgrade (ADR 0015).
 var Refresh bool
 
-// box opens the sandbox, making its base on first use.
 func box(cache, name string) (*sandbox.Box, func(), error) {
 	if err := sandbox.Check(); err != nil {
 		return nil, nil, err
@@ -62,8 +62,7 @@ func box(cache, name string) (*sandbox.Box, func(), error) {
 	return b, func() { f.Close() }, nil
 }
 
-// upstream builds an upstream-build recipe: dovy unpacks the sources, the
-// recipe's build.sh installs into $DESTDIR, dpkg-shlibdeps gives Depends.
+// upstream: the recipe's build.sh installs into $DESTDIR; dpkg-shlibdeps gives Depends.
 func upstream(r *catalog.Recipe, release int, cache, work string) (string, error) {
 	src, stage := filepath.Join(work, "src"), filepath.Join(work, "stage")
 	if err := os.MkdirAll(stage, 0o755); err != nil {
@@ -78,6 +77,103 @@ func upstream(r *catalog.Recipe, release int, cache, work string) (string, error
 			return "", fmt.Errorf("%s: %w", s.URL, err)
 		}
 	}
+	return sandboxed(r, release, cache, work)
+}
+
+// local copies the matching files as the user and builds offline; the folder is only read.
+func local(r *catalog.Recipe, release int, cache, work string) (string, error) {
+	root, files, _, err := LocalFiles(r)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "", fmt.Errorf("no %s files in %s", strings.Join(r.Local.Match, ", "), r.Local.Path)
+	}
+	src := filepath.Join(work, "src")
+	for _, f := range files {
+		if err := copyFile(filepath.Join(root, f), filepath.Join(src, f)); err != nil {
+			return "", err
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(work, "stage"), 0o755); err != nil {
+		return "", err
+	}
+	return sandboxed(r, release, cache, work)
+}
+
+func copyFile(from, to string) error {
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(from)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// LocalFiles does not follow links. stamp is the newest mtime (UTC) of the folder,
+// its subfolders and matching files, so it only increases; "" when nothing matches.
+func LocalFiles(r *catalog.Recipe) (root string, files []string, stamp string, err error) {
+	if r.Local == nil {
+		return "", nil, "", fmt.Errorf("%s: not a local-build", r.Name)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil, "", err
+	}
+	root = filepath.Join(home, strings.TrimPrefix(r.Local.Path, "~/"))
+	var newest time.Time
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root && errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipAll
+			}
+			return err
+		}
+		matched := false
+		for _, m := range r.Local.Match {
+			if ok, _ := filepath.Match(strings.ToLower(m), strings.ToLower(d.Name())); ok {
+				matched = true
+			}
+		}
+		if !d.IsDir() && !(d.Type().IsRegular() && matched) {
+			return nil // links and other files are not taken, nor counted
+		}
+		fi, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+		if !d.IsDir() {
+			rel, _ := filepath.Rel(root, p)
+			files = append(files, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", nil, "", err
+	}
+	sort.Strings(files)
+	if len(files) > 0 {
+		stamp = newest.UTC().Format("20060102150405")
+	}
+	return root, files, stamp, nil
+}
+
+func sandboxed(r *catalog.Recipe, release int, cache, work string) (string, error) {
+	stage := filepath.Join(work, "stage")
 	script, err := os.ReadFile(filepath.Join(r.Dir, "build.sh"))
 	if err != nil {
 		return "", err
@@ -112,7 +208,6 @@ func upstream(r *catalog.Recipe, release int, cache, work string) (string, error
 	return deb.BuildWith(r, deb.Version(r, release), stage, filepath.Join(cache, "debs"), depends)
 }
 
-// shlibdeps writes the libraries the staged ELF files need to /build/depends.
 const shlibdeps = `cd /build
 mkdir -p debian
 printf 'Source: dovy\n\nPackage: dovy\nArchitecture: any\n' >debian/control
@@ -120,7 +215,6 @@ set --
 for f in $(find stage -type f); do readelf -h "$f" >/dev/null 2>&1 && set -- "$@" "-e$f"; done
 if [ $# -gt 0 ]; then dpkg-shlibdeps -O --ignore-missing-info -lstage/usr/lib "$@" >depends; else : >depends; fi`
 
-// readDepends reads dpkg-shlibdeps' "shlibs:Depends=..." line.
 func readDepends(p string) ([]string, error) {
 	b, err := os.ReadFile(p)
 	if err != nil {
@@ -138,8 +232,7 @@ func readDepends(p string) ([]string, error) {
 	return nil, nil
 }
 
-// rebuild rebuilds Debian testing's source against stable (and backports
-// if required), without the network (principles 1.3).
+// rebuild builds Debian testing's source against stable (and backports if needed), offline.
 func rebuild(r *catalog.Recipe, release int, cache, work string) (string, error) {
 	s := r.Sources[0]
 	files, err := sourceFiles(s.URL, s.SHA256, cache, work)
@@ -188,8 +281,6 @@ func rebuild(r *catalog.Recipe, release int, cache, work string) (string, error)
 	return repack(r, m[0], r.Package(), deb.Version(r, release), cache, filepath.Join(work, "repack"))
 }
 
-// sourceFiles fetches a .dsc and the files it lists into work, each checked
-// against the .dsc's sha256 (2.4); it returns their sha256 lines.
 func sourceFiles(url, sum, cache, work string) ([]string, error) {
 	sources := filepath.Join(cache, "sources")
 	p, err := fetch.Get(url, sum, sources)
@@ -221,8 +312,7 @@ func sourceFiles(url, sum, cache, work string) ([]string, error) {
 	return ids, nil
 }
 
-// ParseDsc reads a .dsc's Checksums-Sha256: file name -> sha256. A signed
-// .dsc is read through its signature armour.
+// ParseDsc also reads a signed .dsc, through its armour.
 func ParseDsc(dsc string) (map[string]string, error) {
 	files := map[string]string{}
 	in := false

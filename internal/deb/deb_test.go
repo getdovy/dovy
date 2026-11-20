@@ -227,3 +227,10 @@ func TestStageLinks(t *testing.T) {
 		t.Errorf("link %q", l)
 	}
 }
+
+func TestVersionLocal(t *testing.T) {
+	r := &catalog.Recipe{Version: "1", Input: "20261120153000"}
+	if v := Version(r, 13); v != "1+20261120153000-1~dovy13" {
+		t.Errorf("got %s", v)
+	}
+}

@@ -1,4 +1,4 @@
-// Package deb turns a recipe into a .deb (principles 3.1–3.3, ADR 0010).
+// Package deb turns a recipe into a .deb (ADR 0010).
 package deb
 
 import (
@@ -18,10 +18,10 @@ import (
 	"github.com/getdovy/dovy/internal/catalog"
 )
 
-// Arch is the only architecture for now (principles 6.6).
+// Arch is the only architecture supported for now.
 const Arch = "amd64"
 
-// ArchOf is the package architecture: setup packages hold no binaries.
+// ArchOf: setup packages hold no binaries, so they are arch all.
 func ArchOf(r *catalog.Recipe) string {
 	if r.Kind == catalog.Setup || r.Kind == catalog.VendorRepository || r.Kind == catalog.Bundle || r.Kind == capability.Kind {
 		return "all"
@@ -29,7 +29,6 @@ func ArchOf(r *catalog.Recipe) string {
 	return Arch
 }
 
-// Release reads the Debian major release from an os-release file.
 func Release(osRelease string) (int, error) {
 	f, err := os.Open(osRelease)
 	if err != nil {
@@ -47,11 +46,9 @@ func Release(osRelease string) (int, error) {
 
 // Version is <upstream>-<revision>~dovy<debian> (ADR 0010).
 func Version(r *catalog.Recipe, release int) string {
-	return fmt.Sprintf("%s-%d~dovy%d", r.Version, r.Rev(), release)
+	return fmt.Sprintf("%s-%d~dovy%d", r.Upstream(), r.Rev(), release)
 }
 
-// Stage copies r's [install] files from src into stage, and writes its
-// [[file]] drop-ins.
 func Stage(r *catalog.Recipe, src, stage string) error {
 	for _, f := range r.Files {
 		p := filepath.Join(stage, f.Path)
@@ -97,12 +94,10 @@ func Stage(r *catalog.Recipe, src, stage string) error {
 	return nil
 }
 
-// Build writes DEBIAN/control into stage and builds the .deb into out.
 func Build(r *catalog.Recipe, version, stage, out string) (string, error) {
 	return BuildWith(r, version, stage, out, nil)
 }
 
-// BuildWith is Build with more Depends (a source build's libraries).
 func BuildWith(r *catalog.Recipe, version, stage, out string, depends []string) (string, error) {
 	size, err := installedSize(stage)
 	if err != nil {
@@ -138,15 +133,13 @@ func BuildWith(r *catalog.Recipe, version, stage, out string, depends []string) 
 	return deb, nil
 }
 
-// Control is the package's control file; size is in KiB.
+// Control: size is in KiB.
 func Control(r *catalog.Recipe, version string, size int64) string {
 	return control(r, version, size, nil)
 }
 
-// Conflicts is what r's package conflicts with: the other half of a pair,
-// and replaced Debian packages of another name (ADR 0016). Those are
-// versioned, so they match the real package only, never one that provides
-// its name (tuned-ppd provides power-profiles-daemon).
+// Conflicts are versioned so they match the real package, not one providing its name
+// (tuned-ppd provides power-profiles-daemon) (ADR 0016).
 func Conflicts(r *catalog.Recipe) []string {
 	c := append([]string{}, r.Conflicts...)
 	for _, p := range r.Replaces {
@@ -157,7 +150,6 @@ func Conflicts(r *catalog.Recipe) []string {
 	return c
 }
 
-// ReplacedField records the replaced packages that were installed.
 func ReplacedField(r *catalog.Recipe) string {
 	if len(r.Replaced) == 0 {
 		return ""
@@ -167,8 +159,7 @@ func ReplacedField(r *catalog.Recipe) string {
 
 func control(r *catalog.Recipe, version string, size int64, depends []string) string {
 	var rel string
-	// The recipe's packages, versioned so only the real package satisfies
-	// them, never one that provides the name.
+	// Versioned so only the real package satisfies them, not a provider.
 	var d []string
 	for _, p := range r.Packages {
 		d = append(d, p+" (>= 0)")
@@ -203,7 +194,7 @@ Description: %s
 `, r.Package(), version, ArchOf(r), r.Maintainer, size, rel, field, r.Name, r.Description)
 }
 
-// conffiles lists the staged files dpkg keeps when the user edits them (8.5).
+// conffiles are the files dpkg keeps when the user edits them.
 func conffiles(r *catalog.Recipe, stage string) string {
 	var b strings.Builder
 	var paths []string
@@ -222,7 +213,7 @@ func conffiles(r *catalog.Recipe, stage string) string {
 	return b.String()
 }
 
-// installedSize sums file sizes under dir in KiB, as dpkg counts them.
+// installedSize counts in KiB, as dpkg does.
 func installedSize(dir string) (int64, error) {
 	var n int64
 	err := filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
@@ -234,8 +225,7 @@ func installedSize(dir string) (int64, error) {
 	return n, err
 }
 
-// copyTree copies a folder: files keep their executable bit, links must
-// stay inside it (2.10).
+// copyTree: links must stay inside the folder.
 func copyTree(src, dst string) error {
 	return filepath.Walk(src, func(p string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -289,8 +279,7 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return err
 }
 
-// ContentHash identifies what a capability package ships, so dovy rebuilds
-// it only when that changes.
+// ContentHash lets dovy rebuild a capability package only when its content changes.
 func ContentHash(r *catalog.Recipe) string {
 	h := sha256.Sum256([]byte(capability.Content(r)))
 	return hex.EncodeToString(h[:6])
