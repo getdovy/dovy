@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// Real vendor keys, as fetched for the firefox, google-chrome and brave
-// repositories. Brave's file holds three primary keys.
+// Real vendor keys (firefox, google-chrome, brave). Brave's file holds three primary keys.
 func TestRead(t *testing.T) {
 	cases := map[string]string{
 		"testdata/mozilla.asc": "35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3",

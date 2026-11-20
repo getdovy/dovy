@@ -1,4 +1,4 @@
-// Package unpack extracts tarballs with dovy's own code (principles 2.10).
+// Package unpack extracts archives with dovy's own code.
 package unpack
 
 import (
@@ -16,8 +16,7 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// TarGz extracts a .tar.gz into dest. Absolute paths, "..", and links
-// pointing outside dest are refused.
+// TarGz refuses absolute paths, "..", and links pointing outside dest.
 func TarGz(path, dest string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -31,7 +30,6 @@ func TarGz(path, dest string) error {
 	return untar(tar.NewReader(gz), dest)
 }
 
-// TarXz extracts a .tar.xz, with TarGz's rules.
 func TarXz(path, dest string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -99,7 +97,6 @@ func untar(tr *tar.Reader, dest string) error {
 	}
 }
 
-// inside cleans an archive path and refuses anything outside the root.
 func inside(p string) (string, error) {
 	c := filepath.Clean(p)
 	if filepath.IsAbs(p) || c == ".." || strings.HasPrefix(c, "../") {
@@ -127,8 +124,7 @@ func file(path string, r io.Reader, exec bool) error {
 	return err
 }
 
-// Zip extracts a .zip into dest, with TarGz's rules. Links are refused: zip
-// releases carry plain files.
+// Zip refuses links: zip releases carry plain files.
 func Zip(path, dest string) error {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
@@ -164,9 +160,7 @@ func Zip(path, dest string) error {
 	return nil
 }
 
-// Archive puts a source into dest by its name: archives (.tar.gz, .tar.xz,
-// .zip) are extracted; a .bz2 file is decompressed; any other file is a
-// program downloaded as is, copied executable under its own name.
+// Archive copies a non-archive as an executable under its own name.
 func Archive(path, name, dest string) error {
 	base := filepath.Base(name)
 	switch {
@@ -192,8 +186,6 @@ func Archive(path, name, dest string) error {
 	return file(filepath.Join(dest, base), r, true)
 }
 
-// Archived reports whether name is an archive or compressed file dovy
-// unpacks, rather than a program downloaded as is.
 func Archived(name string) bool {
 	for _, s := range []string{".tar.gz", ".tgz", ".tar.xz", ".txz", ".zip", ".bz2"} {
 		if strings.HasSuffix(name, s) {

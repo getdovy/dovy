@@ -9,10 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-// The live line: one line at the bottom of a terminal while dovy waits
-// (principles 8.7). ASCII only, never wider than the terminal, erased
-// before anything else is written and when the wait ends. Without a
-// terminal nothing is drawn.
+// The live line is ASCII only, never wider than the terminal, and erased before
+// any other output.
 
 // terminal is the one screen stdout and stderr share.
 type terminal struct {
@@ -26,7 +24,6 @@ type terminal struct {
 	any   bool
 }
 
-// needBlank reports whether the last line written is not empty.
 func (t *terminal) needBlank() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -35,8 +32,6 @@ func (t *terminal) needBlank() bool {
 
 var term terminal
 
-// guarded erases the live line before each write, and notes how the
-// output ends.
 type guarded struct{ w io.Writer }
 
 func (g guarded) Write(p []byte) (int, error) {
@@ -64,7 +59,6 @@ func (t *terminal) paint(code, s string) string {
 	return "\033[" + code + "m" + s + "\033[0m"
 }
 
-// Live is a running live line.
 type Live struct {
 	color, verb string
 	render      func(*Live) (text, tail string)
@@ -75,9 +69,7 @@ type Live struct {
 
 const frames = `|/-\`
 
-// Live starts the live line: a spinner, verb, and what render returns at
-// each redraw (text, then a dim tail). It replaces a running one. Stop
-// ends it. On no terminal it does nothing.
+// Live replaces a running live line; on no terminal it does nothing.
 func (u *UI) Live(color, verb string, render func(*Live) (text, tail string)) *Live {
 	l := &Live{color: color, verb: verb, render: render, start: time.Now(), stop: make(chan struct{})}
 	term.mu.Lock()
@@ -112,7 +104,7 @@ func (l *Live) run() {
 	}
 }
 
-// Stop erases the live line. Safe on nil and more than once.
+// Stop is safe on nil and more than once.
 func (l *Live) Stop() {
 	if l == nil {
 		return
@@ -126,7 +118,6 @@ func (l *Live) Stop() {
 	}
 }
 
-// Elapsed is the time since the line started: "8s", "2m 04s".
 func (l *Live) Elapsed() string {
 	s := int(time.Since(l.start).Seconds())
 	if s < 60 {
@@ -135,7 +126,6 @@ func (l *Live) Elapsed() string {
 	return fmt.Sprintf("%dm %02ds", s/60, s%60)
 }
 
-// Rate is n bytes over the time since the line started: "3.1 MiB/s".
 func (l *Live) Rate(n int64) string {
 	if d := time.Since(l.start).Seconds(); d >= 0.5 && n > 0 {
 		return Bytes(int64(float64(n)/d)) + "/s"
@@ -170,8 +160,7 @@ func cut(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// plain keeps printable ASCII: tool output may carry colors, tabs or wide
-// characters, which would break the line's width.
+// plain: tool output may carry colors, tabs or wide characters that break the width.
 func plain(s string) string {
 	var b strings.Builder
 	esc := false
@@ -192,7 +181,6 @@ func plain(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// Bar is a progress bar: [########--------].
 func Bar(done, total int64, width int) string {
 	n := 0
 	if total > 0 {

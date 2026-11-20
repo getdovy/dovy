@@ -12,8 +12,7 @@ test:
 	go vet ./...
 	go test ./...
 
-# deb: dist/dovy_<VERSION>_amd64.deb and dist/SHA256SUMS, built in
-# Debian 13 with its Go (specs/package.md). The source is mounted read-only.
+# deb builds in Debian 13 with its Go; the source is mounted read-only.
 deb:
 	mkdir -p dist
 	docker run --rm -v "$(CURDIR)":/src:ro -v "$(CURDIR)/dist":/out debian:13 sh -ec '\

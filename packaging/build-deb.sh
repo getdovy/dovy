@@ -1,7 +1,6 @@
 #!/bin/sh
-# Builds OUT/dovy_<version>_amd64.deb and OUT/SHA256SUMS
-# (specs/package.md). Run from the repository root, in Debian 13 with its
-# Go: make deb does both. Usage: packaging/build-deb.sh VERSION OUT
+# Usage: packaging/build-deb.sh VERSION OUT
+# Run from the repository root in Debian 13 with its Go (make deb does this).
 set -eu
 version=$1 out=$2
 deb=$version-1~dovy13 # what the dovy recipe stamps (ADR 0010)

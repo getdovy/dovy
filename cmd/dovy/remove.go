@@ -18,13 +18,12 @@ import (
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// pkgInfo is an installed package as dpkg knows it.
 type pkgInfo struct {
 	Version, Recipe, Capability, Content, Replaced string
 	Size                                           int64 // bytes
 }
 
-// dpkgInstalled lists installed packages with dovy's field (3.3).
+// dpkgInstalled lists installed packages with dovy's field.
 func dpkgInstalled() (map[string]pkgInfo, error) {
 	out, err := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\t${Version}\t${Installed-Size}\t${X-Dovy-Recipe}\t${X-Dovy-Capability}\t${X-Dovy-Content}\t${X-Dovy-Replaced}\t${db:Status-Abbrev}\n").Output()
 	if err != nil {
@@ -42,8 +41,7 @@ func dpkgInstalled() (map[string]pkgInfo, error) {
 	return m, nil
 }
 
-// recipePackages maps each installed recipe to its package: the one named
-// after it when a recipe ships several (ADR 0018).
+// A recipe shipping several packages maps to the one named after it (ADR 0018).
 func recipePackages(inst map[string]pkgInfo) map[string]string {
 	m := map[string]string{}
 	for p, i := range inst {
@@ -57,8 +55,7 @@ func recipePackages(inst map[string]pkgInfo) map[string]string {
 	return m
 }
 
-// installedAs finds p in inst under apt's name or dpkg's: dpkg adds the
-// native architecture to Multi-Arch: same packages (mesa-va-drivers:amd64).
+// dpkg adds the native architecture to Multi-Arch: same packages (mesa-va-drivers:amd64).
 func installedAs(inst map[string]pkgInfo, p string) (pkgInfo, bool) {
 	if i, ok := inst[p]; ok {
 		return i, true
@@ -67,8 +64,7 @@ func installedAs(inst map[string]pkgInfo, p string) (pkgInfo, bool) {
 	return i, ok
 }
 
-// changedConfig reports whether the user changed one of pkg's config
-// files: dpkg records each one's md5 (4.4). A file deleted is no loss.
+// dpkg records each conffile's md5; a deleted file is no loss.
 func changedConfig(pkg string) bool {
 	out, _ := exec.Command("dpkg-query", "-W", "-f", "${Conffiles}", pkg).Output()
 	for _, c := range parseConffiles(string(out)) {
@@ -93,7 +89,6 @@ func parseConffiles(s string) []conffile {
 	return cs
 }
 
-// leavesConfig reports whether removing pkg leaves config behind (4.4):
 // dpkg keeps conffiles, and keeps the package for its postrm purge step.
 func leavesConfig(pkg string) bool {
 	for _, n := range []string{pkg, pkg + ":amd64", pkg + ":i386"} {
@@ -113,8 +108,7 @@ func configOnly(pkg string) bool {
 	return strings.HasPrefix(string(out), "rc")
 }
 
-// unused is what removing pkgs leaves unused, apart from what apt already
-// considered unused before: never a system-wide autoremove (4.1).
+// unused skips what was already unused before: never a system-wide autoremove.
 func unused(before, after []string, pkgs map[string]bool) []string {
 	was := map[string]bool{}
 	for _, n := range before {
@@ -165,7 +159,7 @@ func (a *app) remove(names []string) int {
 			return exitFailed
 		}
 		if r := rs[n]; r != nil && r.Repo != nil && !r.Repo.Pinned() {
-			// NVIDIA: nothing comes back; nouveau takes over (4.5, ADR 0017).
+			// NVIDIA: nothing comes back; nouveau takes over (ADR 0017).
 			t.removing[p] = "purged"
 			t.request = append(t.request, p+"-")
 			t.leftover = "Without NVIDIA's driver the machine uses nouveau after a reboot. Debian's driver, if wanted: sudo apt install nvidia-driver"
@@ -176,8 +170,8 @@ func (a *app) remove(names []string) int {
 		if r := rs[n]; r != nil {
 			t.expectWith(r, inst)
 		}
-		// The recipe's other packages (ADR 0018) go by name: apt never
-		// counts the newest kernel as unused.
+		// The recipe's other packages go by name: apt never counts the newest
+		// kernel as unused (ADR 0018).
 		for q, i := range inst {
 			if i.Recipe == n && q != p {
 				t.removing[q] = "with " + n
@@ -185,7 +179,7 @@ func (a *app) remove(names []string) int {
 			}
 		}
 	}
-	// A recipe still needed by another installed recipe stays (4.8).
+	// A recipe still needed by another installed recipe stays.
 	for r, p := range byRecipe {
 		if _, gone := t.removing[p]; gone || rs[r] == nil {
 			continue
@@ -240,8 +234,8 @@ func (a *app) remove(names []string) int {
 	track(tmp)
 	t.tmp = tmp
 
-	// Backports packages that stay installed return to stable (4.6); those
-	// left unused go with the recipe (4.1).
+	// Backports packages that stay return to stable; those left unused go with
+	// the recipe.
 	out, err := apt.Simulate(apt.Unused, t.args(nil)...)
 	if err != nil {
 		a.errs.Fail(err.Error(), "unchanged", "check that apt works: sudo apt-get check", "")
@@ -288,9 +282,8 @@ func (a *app) remove(names []string) int {
 	return code
 }
 
-// restore removes a recipe's package and brings back the Debian packages
-// it replaced, with their mark (ADR 0016): another name is reinstalled; the
-// same name returns to Debian's version.
+// A replaced package with another name is reinstalled; the same name returns
+// to Debian's version, with its mark (ADR 0016).
 func (t *txn) restore(p string, i pkgInfo) {
 	back := map[string]string{}
 	for _, x := range splitList(i.Replaced) {
@@ -328,7 +321,6 @@ func sortedKeys(m map[string]string) []string {
 	return k
 }
 
-// kept lists the recipes' Debian packages that stay, and why (12.2).
 func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[string]pkgInfo, removing map[string]bool) []ui.Pair {
 	manual := manualPkgs()
 	var kept []ui.Pair
@@ -338,7 +330,7 @@ func (a *app) kept(names []string, rs map[string]*catalog.Recipe, inst map[strin
 		if r == nil {
 			continue
 		}
-		for _, m := range r.Members { // a bundle's members are recipes of their own (6.8)
+		for _, m := range r.Members { // a bundle's members are recipes of their own
 			if o := rs[m]; o != nil && !contains(names, m) {
 				if _, ok := inst[o.Package()]; ok {
 					kept = append(kept, ui.Pair{Item: m, Reason: "member of " + n + "; remove it on its own"})

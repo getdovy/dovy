@@ -1,4 +1,4 @@
-// Package ui draws dovy's terminal output (principles topic 12).
+// Package ui draws dovy's terminal output.
 package ui
 
 import (
@@ -14,7 +14,6 @@ import (
 	"unsafe"
 )
 
-// Colors. Empty when color is off.
 const (
 	Bold   = "1"
 	Dim    = "2"
@@ -26,23 +25,19 @@ const (
 
 const maxWidth = 100
 
-// The grid (principles 12.12): sentences, the prompt and the spinner at
-// column 0; every row at column 2; a row's own details at column 4; labels
-// and verbs 12 wide, so their text starts at column 15.
+// Rows start at column 2, their details at 4; labels are 12 wide, so text starts at 15.
 const (
 	indent = "  "
 	sub    = "    "
 	label  = 12
 )
 
-// UI writes to Out. Width is the usable line width.
 type UI struct {
 	Out   io.Writer
 	Color bool
 	Width int
 }
 
-// New sets up a UI for f: color only on a terminal without NO_COLOR.
 func New(f *os.File) *UI {
 	tty := isTerminal(f)
 	u := &UI{
@@ -77,7 +72,6 @@ func columns(f *os.File) int {
 	return 80
 }
 
-// Paint wraps s in a color code when color is on.
 func (u *UI) Paint(code, s string) string {
 	if !u.Color || code == "" || s == "" {
 		return s
@@ -87,7 +81,6 @@ func (u *UI) Paint(code, s string) string {
 
 func (u *UI) line(s string) { fmt.Fprintln(u.Out, strings.TrimRight(s, " ")) }
 
-// Blank prints an empty line.
 func (u *UI) Blank() { fmt.Fprintln(u.Out) }
 
 func width(s string) int { return utf8.RuneCountInString(s) }
@@ -95,7 +88,6 @@ func width(s string) int { return utf8.RuneCountInString(s) }
 func pad(s string, w int) string  { return s + strings.Repeat(" ", max(w-width(s), 0)) }
 func rpad(s string, w int) string { return strings.Repeat(" ", max(w-width(s), 0)) + s }
 
-// Rule prints a centered title rule: ---- Title ----
 func (u *UI) Rule(color, title string) {
 	if _, ok := u.Out.(guarded); ok && term.needBlank() { // a rule never touches the line above it
 		u.Blank()
@@ -106,26 +98,20 @@ func (u *UI) Rule(color, title string) {
 	u.line(u.Paint(Dim, strings.Repeat("-", max(l, 0))) + u.Paint(color, u.Paint(Bold, t)) + u.Paint(Dim, strings.Repeat("-", r)))
 }
 
-// Say prints a tool line with an aligned verb: "  Unpacking:   steam (1.0)".
 func (u *UI) Say(color, verb, text string) {
 	u.line(indent + u.Paint(color, pad(verb, label)) + " " + text)
 }
 
-// Under prints a line under a Say line, at its text.
 func (u *UI) Under(text string) { u.line(indent + pad("", label) + " " + text) }
 
-// Raw prints tool output indented, dim.
 func (u *UI) Raw(s string) { u.line(sub + u.Paint(Dim, s)) }
 
-// KV prints "  Key          value".
 func (u *UI) KV(k, v string) { u.line(indent + u.Paint(Dim, pad(k, label)) + " " + v) }
 
-// Grace is waited before an error block. A tool that died of Ctrl-C makes
-// an error, but dovy received the Ctrl-C too: its handler ends the run
-// with "Cancelled" (8.10) within this time. Set by main; zero in tests.
+// Grace delays the error block: after Ctrl-C a dying tool returns an error, but
+// dovy's own handler prints "Cancelled" within this time. Zero in tests.
 var Grace time.Duration
 
-// Fail prints the error block (topic 8, rule 8).
 func (u *UI) Fail(failed, system, next, log string) {
 	time.Sleep(Grace)
 	u.Rule(Red, "Error")
@@ -137,7 +123,6 @@ func (u *UI) Fail(failed, system, next, log string) {
 	}
 }
 
-// Refuse prints a refusal: nothing was changed.
 func (u *UI) Refuse(recipe, reason, found string) {
 	time.Sleep(Grace)
 	u.Rule(Yellow, "Refused")
@@ -149,7 +134,6 @@ func (u *UI) Refuse(recipe, reason, found string) {
 	u.KV("System", "unchanged")
 }
 
-// Confirm asks "Continue? [y/N]"; anything but y or yes is no.
 func (u *UI) Confirm(in io.Reader) bool {
 	fmt.Fprint(u.Out, "Continue? [y/N] ")
 	a, _ := bufio.NewReader(in).ReadString('\n')
@@ -160,7 +144,6 @@ func (u *UI) Confirm(in io.Reader) bool {
 	return a == "y" || a == "yes"
 }
 
-// Bytes formats a size: 412 KiB, 4.2 MiB.
 func Bytes(n int64) string {
 	switch {
 	case n < 1024:

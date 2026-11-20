@@ -1,6 +1,5 @@
 #!/bin/sh
-# purge: dovy's data and configuration. Installed recipe packages, the i386
-# architecture and home folders are left alone (specs/package.md).
+# Purge leaves installed recipe packages, the i386 architecture and home folders alone.
 set -e
 if [ "$1" = purge ]; then
 	rm -rf /var/lib/dovy /var/log/dovy /etc/dovy

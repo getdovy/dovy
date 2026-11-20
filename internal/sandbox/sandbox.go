@@ -1,5 +1,4 @@
-// Package sandbox runs source builds in a minimal Debian stable, unprivileged
-// (principles 2.5, ADR 0006, ADR 0015).
+// Package sandbox runs source builds unprivileged in a minimal Debian stable (ADR 0006).
 package sandbox
 
 import (
@@ -15,18 +14,15 @@ import (
 	"time"
 )
 
-// Box is the sandbox's cache: base, layers, apt downloads.
 type Box struct {
 	Dir      string // cache/sandbox
 	Codename string // Debian release, e.g. trixie
 	Log      io.Writer
 }
 
-// userns is the namespace every step runs in: the user is root, the
-// subuid range maps the rest, so dpkg works inside.
+// userns maps the user to root and the subuid range to the rest, so dpkg works inside.
 var userns = []string{"unshare", "--map-auto", "--map-root-user", "--mount", "--pid", "--fork", "--kill-child"}
 
-// Check reports why source builds cannot run here, or nil.
 func Check() error {
 	var missing []string // all at once: one command for the user
 	for _, t := range []struct{ cmd, pkg string }{{"mmdebstrap", "mmdebstrap"}, {"newuidmap", "uidmap"}} {
@@ -47,14 +43,12 @@ func Check() error {
 func (b *Box) base() string     { return filepath.Join(b.Dir, "base") }
 func (b *Box) archives() string { return filepath.Join(b.Dir, "archives") }
 
-// baseID changes whenever the base is made again.
 func (b *Box) baseID() string {
 	id, _ := os.ReadFile(filepath.Join(b.Dir, "base.id"))
 	return string(id)
 }
 
-// Base makes the base once: mmdebstrap writes a tarball, unpacked inside
-// the namespace so file owners match every later step.
+// Base unpacks mmdebstrap's tarball inside the namespace so file owners match later steps.
 func (b *Box) Base() error {
 	// A base without umount predates the detached host root: made again.
 	if _, err := os.Stat(filepath.Join(b.base(), "usr/bin/umount")); b.baseID() != "" && err == nil {
@@ -92,7 +86,6 @@ func (b *Box) Base() error {
 	return os.WriteFile(filepath.Join(b.Dir, "base.id"), []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644)
 }
 
-// Reset drops the base and every layer; the next build makes them again.
 func (b *Box) Reset() error {
 	os.Remove(filepath.Join(b.Dir, "base.id"))
 	if err := Remove(filepath.Join(b.Dir, "layers")); err != nil {
@@ -101,8 +94,7 @@ func (b *Box) Reset() error {
 	return Remove(b.base())
 }
 
-// Layer makes name's layer, with the network, by running script in it;
-// it is kept while key and the base are unchanged.
+// Layer runs with the network; it is kept while key and the base are unchanged.
 func (b *Box) Layer(name, key, work, script string) (string, error) {
 	dir := filepath.Join(b.Dir, "layers", name)
 	h := sha256.Sum256([]byte(b.baseID() + "\n" + key))
@@ -120,8 +112,6 @@ func (b *Box) Layer(name, key, work, script string) (string, error) {
 	return dir, os.WriteFile(filepath.Join(dir, "key"), []byte(id), 0o644)
 }
 
-// Run runs script on a throwaway overlay over layer, with work at /build;
-// the network is off unless network is true.
 func (b *Box) Run(layer, work, script string, network bool) error {
 	lower := b.base()
 	if layer != "" {
@@ -135,10 +125,8 @@ func (b *Box) Run(layer, work, script string, network bool) error {
 	return b.run(lower, tmp, work, script, network)
 }
 
-// run mounts an overlay of lower with upper dir/up, makes it the root
-// (pivot_root; root can leave a chroot) and detaches the host's, then runs
-// script as root with work at /build. The host's files are not visible.
-// Tools are named by path: a user's PATH has no sbin.
+// run uses pivot_root, not chroot, which root can leave. Tools are named by path:
+// a user's PATH has no sbin.
 func (b *Box) run(lower, dir, work, script string, network bool) error {
 	for _, d := range []string{filepath.Join(dir, "up"), filepath.Join(dir, "wk"), filepath.Join(dir, "root"), b.archives()} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -157,8 +145,6 @@ func (b *Box) run(lower, dir, work, script string, network bool) error {
 	return err
 }
 
-// setup builds the root: overlay, /proc, a minimal /dev, /tmp, apt's
-// download cache and /build; then runs the script with a clean environment.
 const setup = `set -e
 lower=$1 dir=$2 work=$3 archives=$4 script=$5
 root=$dir/root
@@ -201,8 +187,7 @@ func (b *Box) cmd(name string, args ...string) error {
 	return nil
 }
 
-// Remove deletes path, whose files may be owned by subuids, inside the
-// namespace.
+// Remove runs inside the namespace: files may be owned by subuids.
 func Remove(path string) error {
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -217,7 +202,6 @@ func Remove(path string) error {
 	return nil
 }
 
-// tailBuffer keeps the last lines of output, for errors.
 type tailBuffer struct{ lines []string }
 
 func (t *tailBuffer) Write(p []byte) (int, error) {
