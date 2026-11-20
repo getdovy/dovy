@@ -81,3 +81,45 @@ func TestPublish(t *testing.T) {
 		t.Errorf("leftovers: %v", left)
 	}
 }
+
+func TestFind(t *testing.T) {
+	if _, err := exec.LookPath("dpkg-deb"); err != nil {
+		t.Skip("no dpkg-deb")
+	}
+	dir := filepath.Join(t.TempDir(), "repo")
+	if err := Publish(dir, []string{build(t, "pfetch", "3.1.1-1~dovy13")}, Direct); err != nil {
+		t.Fatal(err)
+	}
+	copy := filepath.Join(dir, "pfetch_3.1.1-1~dovy13_amd64.deb")
+	if p, ok := Find(dir, "pfetch", "3.1.1-1~dovy13"); !ok || p != copy {
+		t.Errorf("intact copy: %q %v", p, ok)
+	}
+	if _, ok := Find(dir, "pfetch", "3.1.1-2~dovy13"); ok {
+		t.Error("other version found")
+	}
+	if _, ok := Find(dir, "fzf", "3.1.1-1~dovy13"); ok {
+		t.Error("other package found")
+	}
+	// A reinstall publishes the copy already there: nothing is copied or lost.
+	before, _ := os.ReadFile(filepath.Join(dir, "Packages"))
+	if err := Publish(dir, []string{copy}, Direct); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, "Packages")); string(after) != string(before) {
+		t.Errorf("index changed:\n%s", after)
+	}
+	if _, ok := Find(dir, "pfetch", "3.1.1-1~dovy13"); !ok {
+		t.Error("copy lost by republishing it")
+	}
+	// Same size, other bytes: damaged, not found.
+	b, _ := os.ReadFile(copy)
+	b[len(b)-1] ^= 0xff
+	os.WriteFile(copy, b, 0o644)
+	if _, ok := Find(dir, "pfetch", "3.1.1-1~dovy13"); ok {
+		t.Error("damaged copy found")
+	}
+	os.Remove(copy)
+	if _, ok := Find(dir, "pfetch", "3.1.1-1~dovy13"); ok {
+		t.Error("missing copy found")
+	}
+}

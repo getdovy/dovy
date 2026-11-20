@@ -1,5 +1,4 @@
-// Package repo keeps dovy's local apt repository: a flat repository,
-// writable only by root (principles 7.3, 8.1).
+// Package repo keeps dovy's local flat apt repository, writable only by root.
 package repo
 
 import (
@@ -18,10 +17,8 @@ import (
 // Dir is the repository: deb [trusted=yes] file:/var/lib/dovy/repo ./
 const Dir = "/var/lib/dovy/repo"
 
-// Root runs a command as root.
 type Root func(args ...string) error
 
-// Sudo runs args with sudo (principles 2.9).
 func Sudo(args ...string) error {
 	cmd := exec.Command("sudo", append([]string{"--"}, args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -31,7 +28,7 @@ func Sudo(args ...string) error {
 	return nil
 }
 
-// Direct runs args as the current user; for tests.
+// Direct is for tests.
 func Direct(args ...string) error {
 	if b, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 		return fmt.Errorf("%s: %s", strings.Join(args, " "), strings.TrimSpace(string(b)))
@@ -39,11 +36,8 @@ func Direct(args ...string) error {
 	return nil
 }
 
-// Publish adds debs to the repository in dir, drops the versions they
-// supersede, and rewrites the indexes.
 func Publish(dir string, debs []string, root Root) error { return Update(dir, debs, nil, root) }
 
-// Update adds debs, removes the named packages, and rewrites the indexes.
 func Update(dir string, debs, remove []string, root Root) error {
 	tmp, err := os.MkdirTemp("", "dovy-repo-")
 	if err != nil {
@@ -104,6 +98,9 @@ func Update(dir string, debs, remove []string, root Root) error {
 		return err
 	}
 	for _, p := range debs {
+		if filepath.Dir(p) == filepath.Clean(dir) { // already here: a reinstall's copy
+			continue
+		}
 		if err := root("install", "-m", "644", p, filepath.Join(dir, filepath.Base(p))); err != nil {
 			return err
 		}
@@ -125,7 +122,6 @@ func Update(dir string, debs, remove []string, root Root) error {
 	return nil
 }
 
-// stanza is the deb's Packages entry.
 func stanza(deb string) (string, error) {
 	b, err := exec.Command("dpkg-deb", "-f", deb).Output()
 	if err != nil {
@@ -171,9 +167,21 @@ func hashFile(p string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }
 
-// indexed reads dir's Packages: each .deb still there with the size the
-// index records keeps its stanza, so it is not read and hashed again. Only
-// root writes dir (7.3).
+// Find returns the .deb only when its size and SHA256 match the index, so a reinstall
+// can skip the build.
+func Find(dir, pkg, version string) (string, bool) {
+	for p, st := range indexed(dir) {
+		if stanzaField(st, "Package") != pkg || stanzaField(st, "Version") != version {
+			continue
+		}
+		sum, _, err := hashFile(p)
+		return p, err == nil && sum == stanzaField(st, "SHA256")
+	}
+	return "", false
+}
+
+// indexed keeps the stanza of each .deb whose size is unchanged, so it is not hashed
+// again; only root writes dir.
 func indexed(dir string) map[string]string {
 	b, err := os.ReadFile(filepath.Join(dir, "Packages"))
 	if err != nil {
@@ -194,7 +202,6 @@ func indexed(dir string) map[string]string {
 	return m
 }
 
-// stanzaField is a field's value in a control stanza; "" if absent.
 func stanzaField(st, name string) string {
 	for _, l := range strings.Split(st, "\n") {
 		if v, ok := strings.CutPrefix(l, name+":"); ok {
