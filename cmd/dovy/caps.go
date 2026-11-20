@@ -25,8 +25,7 @@ func foreign() bool {
 	return strings.Contains(" "+strings.Join(strings.Fields(string(out)), " ")+" ", " i386 ")
 }
 
-// simConfig is what the simulation's temporary apt configuration adds:
-// sources and pins ("" removes one), keyrings, and i386.
+// simConfig extends the simulation's temporary apt configuration; a "" source or pin removes one.
 type simConfig struct {
 	sources, prefs, keys map[string]string
 	i386                 bool
@@ -40,9 +39,7 @@ func (c *simConfig) empty() bool {
 	return len(c.sources) == 0 && len(c.prefs) == 0 && !c.i386
 }
 
-// planCap adds a capability or repository package to build and install
-// first, unless the installed one ships the same (5.1). It reports whether
-// it was added.
+// planCap skips a package whose installed version ships the same content.
 func (t *txn) planCap(r *catalog.Recipe) (added, updated bool) {
 	pkg := r.Package()
 	i, installed := t.inst[pkg]
@@ -59,11 +56,11 @@ func (t *txn) planCap(r *catalog.Recipe) (added, updated bool) {
 	return true, installed
 }
 
-// capabilities plans what t's recipes need (5.1–5.4): new capabilities, and
-// installed ones whose content changed, built and installed first.
-// needs maps a capability to the recipes asking for it.
+// Capabilities are built and installed first. needs maps a capability to the
+// recipes asking for it.
 func (t *txn) capabilities(needs map[string][]string, codename string, sim *simConfig) error {
 	srcs := capability.System("/etc/apt")
+	capability.Resolve(srcs, t.listsDir()) // sources naming stable count as the release's
 	compText, added := capability.ComponentsSource(srcs, codename)
 	_, compInstalled := t.inst[capability.Components]
 	var extra []string
@@ -119,8 +116,8 @@ func (t *txn) capabilities(needs map[string][]string, codename string, sim *simC
 	return nil
 }
 
-// repoPackages is the pin's package list for q: the packages of every
-// recipe using it that stays or comes installed (ADR 0013).
+// repoPackages is q's pin list: packages of the recipes using q that stay or
+// come installed (ADR 0013).
 func repoPackages(q *catalog.Repository, rs map[string]*catalog.Recipe, using map[string]bool) []string {
 	set := map[string]bool{}
 	for name := range using {
@@ -138,11 +135,8 @@ func repoPackages(q *catalog.Repository, rs map[string]*catalog.Recipe, using ma
 	return pkgs
 }
 
-// repository plans dovy-repo-<name> for pkgs (2.4, 5.10, ADR 0013): no
-// other source for the host, the key fetched live (or key, when given,
-// read from the installed keyring) and checked by fingerprint. sim, when
-// set, gets the source, key and pin for the simulation. refusal is set
-// when it cannot go ahead.
+// key, when given, comes from the installed keyring; otherwise it is fetched
+// live. Either is checked by fingerprint (ADR 0013).
 func (t *txn) repository(q *catalog.Repository, pkgs []string, key []byte, users string, sim *simConfig) (refusal [2]string, err error) {
 	host := capability.Host(q.URI)
 	if s := capability.UsedBy(capability.System("/etc/apt"), host); s != nil {
@@ -184,16 +178,15 @@ func (t *txn) repository(q *catalog.Repository, pkgs []string, key []byte, users
 	return refusal, nil
 }
 
-// leaveI386 plans i386's removal when dovy-i386 goes (4.8): dovy added i386
-// and nothing of the user's needs it, so every i386 package is purged in a
-// final step, then dovy-i386's postrm removes the architecture.
+// Every i386 package is purged in a final step, then dovy-i386's postrm
+// removes the architecture.
 func (t *txn) leaveI386(stubs []string) error {
 	if _, ok := t.removing[capability.I386]; !ok && !t.unused[capability.I386] {
 		return nil
 	}
 	t.final = map[string]bool{capability.I386: true}
 	if _, err := os.Stat(capability.I386Added); err != nil {
-		return nil // i386 was there before dovy: it stays (3.6)
+		return nil // i386 was there before dovy: it stays
 	}
 	var own []string
 	for n := range manualPkgs() {
@@ -264,10 +257,8 @@ func pkgName(arg string) string {
 	return strings.TrimSuffix(n, "-")
 }
 
-// repacked downloads r's package from its repacked repository and repacks
-// it (ADR 0014): key checked by fingerprint, the repository read with a
-// temporary apt configuration as the user (apt checks the signed index),
-// never given to the system's apt. It returns the repack and its version.
+// The repository is read as the user through a temporary apt configuration,
+// never added to the system's apt (ADR 0014).
 func (t *txn) repacked(r *catalog.Recipe, cache string) (path, version string, refusal [2]string, err error) {
 	q := r.Repo
 	host := capability.Host(q.URI)
