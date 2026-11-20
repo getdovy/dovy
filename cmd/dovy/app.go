@@ -12,13 +12,14 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/getdovy/dovy/internal/build"
 	"github.com/getdovy/dovy/internal/catalog"
 	"github.com/getdovy/dovy/internal/fetch"
 	"github.com/getdovy/dovy/internal/repo"
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// app is what the commands need; tests replace any of it.
+// app holds what the commands need; tests replace any of it.
 type app struct {
 	out, errs *ui.UI
 	dir       string                            // local catalog
@@ -28,7 +29,7 @@ type app struct {
 	in        io.Reader                         // answers to Continue?
 	root      repo.Root                         // runs a command as root
 
-	// What the live line shows (principles 8.7); written by other goroutines.
+	// Live line state, written by other goroutines.
 	wait  *ui.Live               // while planning
 	step  atomic.Pointer[string] // planning step
 	file  atomic.Pointer[string] // file being fetched
@@ -39,8 +40,6 @@ type app struct {
 	pkg   atomic.Pointer[string] // package apt is on
 }
 
-// planning starts the live line for the time before the plan is shown;
-// the returned func ends it. at names the step.
 func (a *app) planning() func() {
 	a.at("reading packages")
 	a.file.Store(nil)
@@ -56,7 +55,7 @@ func (a *app) planning() func() {
 
 func (a *app) at(step string) { a.step.Store(&step) }
 
-// fetched is how far the current download is: " 42%", or its size so far.
+// fetched returns " 42%", or the size so far when the total is unknown.
 func (a *app) fetched() string {
 	got, total := a.got.Load(), a.total.Load()
 	switch {
@@ -68,7 +67,7 @@ func (a *app) fetched() string {
 	return ""
 }
 
-// progress receives fetch.Progress.
+// progress is the fetch.Progress callback.
 func (a *app) progress(url string, got, total int64) {
 	name := filepath.Base(url)
 	a.file.Store(&name)
@@ -79,7 +78,6 @@ func (a *app) progress(url string, got, total int64) {
 	a.total.Store(total)
 }
 
-// fetching is the live line of one download.
 func (a *app) fetching(url string) *ui.Live {
 	name := filepath.Base(url)
 	a.got.Store(0)
@@ -93,7 +91,6 @@ func (a *app) fetching(url string) *ui.Live {
 	})
 }
 
-// stepping is the live line of an apt step: its bar and current package.
 func (a *app) stepping(color, verb string) *ui.Live {
 	a.dl.Store(verb == "Fetching") // apt reports its own downloads in every step
 	a.pct.Store(0)
@@ -120,7 +117,6 @@ func newApp(out, errs *ui.UI) (*app, error) {
 	return a, nil
 }
 
-// installed asks dpkg which dovy packages are installed.
 func installed() (map[string]string, error) {
 	out, err := exec.Command("dpkg-query", "-W", "-f", "${X-Dovy-Recipe}\t${Version}\t${db:Status-Abbrev}\n").Output()
 	if err != nil {
@@ -136,7 +132,16 @@ func installed() (map[string]string, error) {
 	return m, nil
 }
 
-// load verifies and reads the catalog (every run, topic 8 rule 2).
+// A local-build's files' last change is part of its version; "" when it has none.
+func localInputs(rs map[string]*catalog.Recipe) {
+	for _, r := range rs {
+		if r.Kind == catalog.LocalBuild {
+			_, _, r.Input, _ = build.LocalFiles(r)
+		}
+	}
+}
+
+// load verifies the catalog on every run.
 func (a *app) load() (map[string]*catalog.Recipe, int) {
 	if err := catalog.Verify(a.dir, a.signers); err != nil {
 		next := "dovy update"
@@ -156,6 +161,7 @@ func (a *app) load() (map[string]*catalog.Recipe, int) {
 	for _, r := range rs {
 		r.Release = tag
 	}
+	localInputs(rs)
 	return rs, exitOK
 }
 
@@ -200,7 +206,6 @@ func (a *app) update() int {
 	return exitOK
 }
 
-// row is one recipe as list and search show it.
 type row struct {
 	name, version, status, note, description string
 }
@@ -217,14 +222,14 @@ func (a *app) rows() ([]row, int) {
 	}
 	var out []row
 	for n, r := range rs {
-		x := row{name: n, version: r.Version, status: "available", note: note(r), description: r.Description}
+		x := row{name: n, version: r.Upstream(), status: "available", note: note(r), description: r.Description}
 		if why := unavailable(r, rs); why != "" {
 			x.status, x.note = "not available", why
 		}
 		if v, ok := inst[n]; ok {
 			x.version, x.status = v, "installed"
-			if upstream(v) != r.Version {
-				x.status = "update " + r.Version
+			if upstream(v) != r.Upstream() {
+				x.status = "update " + r.Upstream()
 			}
 		}
 		out = append(out, x)
@@ -356,11 +361,11 @@ func (a *app) show(args []string) int {
 		}
 		return a.diff(rs[name])
 	}
-	version := r.Version
+	version := r.Upstream()
 	if v, ok := inst[name]; ok {
 		version = v + " (installed)"
-		if upstream(v) != r.Version {
-			version += ", " + r.Version + " available"
+		if upstream(v) != r.Upstream() {
+			version += ", " + r.Upstream() + " available"
 		}
 	}
 	a.out.Rule("", name)
@@ -402,6 +407,8 @@ func source(r *catalog.Recipe) string {
 		return "Debian: " + strings.Join(r.Packages, " ")
 	case len(r.Members) > 0:
 		return "bundle: " + strings.Join(r.Members, " ")
+	case r.Local != nil:
+		return "your files: " + strings.Join(r.Local.Match, ", ") + " in " + r.Local.Path
 	}
 	return "files only"
 }
@@ -413,8 +420,7 @@ func or(s, def string) string {
 	return s
 }
 
-// diff prints what changed in r since its installed build: that release is
-// fetched and verified, then its recipe and repository files are compared.
+// diff fetches and verifies the installed build's release to compare against.
 func (a *app) diff(r *catalog.Recipe) int {
 	out, _ := exec.Command("dpkg-query", "-W", "-f", "${X-Dovy-Release}", r.Package()).Output()
 	was, cur := strings.TrimSpace(string(out)), r.Release

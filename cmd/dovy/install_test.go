@@ -176,3 +176,20 @@ func TestReplaceMultiArch(t *testing.T) {
 		t.Errorf("removing %v, replaced %v, request %v", tx.removing, r.Replaced, tx.request)
 	}
 }
+
+func TestInherit(t *testing.T) {
+	// multimedia-codecs takes over from codecs, which had replaced Debian's
+	// free Intel driver: removing multimedia-codecs must bring it back.
+	x := &catalog.Recipe{Name: "multimedia-codecs", Replaces: []string{"intel-media-va-driver"}}
+	if got := strings.Join(inherit(x, "intel-media-va-driver manual, mpv auto"), ", "); got != "intel-media-va-driver manual" {
+		t.Errorf("got %q", got)
+	}
+	// Its own record stays first and is not doubled.
+	x.Replaced = []string{"intel-media-va-driver auto"}
+	if got := strings.Join(inherit(x, "intel-media-va-driver manual"), ", "); got != "intel-media-va-driver auto" {
+		t.Errorf("own record: %q", got)
+	}
+	if got := inherit(&catalog.Recipe{}, ""); len(got) != 0 {
+		t.Errorf("nothing: %v", got)
+	}
+}

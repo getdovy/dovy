@@ -14,11 +14,17 @@ _dovy() {
 	local cur=${COMP_WORDS[COMP_CWORD]} names w
 	COMPREPLY=()
 	if [ "$COMP_CWORD" -eq 1 ]; then
-		COMPREPLY=($(compgen -W "install remove update upgrade list search show check" -- "$cur"))
+		COMPREPLY=($(compgen -W "install remove update upgrade list search show check clean" -- "$cur"))
 		return
 	fi
 	case ${COMP_WORDS[1]} in
-	install) names=$(LC_ALL=C comm -23 <(_dovy_recipes | LC_ALL=C sort) <(_dovy_installed)) ;;
+	install)
+		if printf '%s\n' "${COMP_WORDS[@]}" | grep -qxF -- --reinstall; then
+			names=$(_dovy_installed) # installed again
+		else
+			names=$(LC_ALL=C comm -23 <(_dovy_recipes | LC_ALL=C sort) <(_dovy_installed))
+		fi
+		;;
 	remove) names=$(_dovy_installed) ;;
 	show) [ "$COMP_CWORD" -eq 2 ] && names=$(_dovy_recipes) ;;
 	esac

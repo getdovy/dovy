@@ -20,7 +20,6 @@ import (
 // Set at build time: -ldflags "-X main.version=1.0.0".
 var version = "0.0.0-dev"
 
-// Exit codes (principles topic 12, rule 10).
 const (
 	exitOK        = 0
 	exitFailed    = 1
@@ -30,8 +29,7 @@ const (
 	exitRestart   = 5 // dovy upgraded itself: the new one carries on (never shown)
 )
 
-// Self is where dovy's package installs it, and Restarted marks the run
-// that dovy started after upgrading itself (principles 9.4).
+// Restarted marks the run started after dovy upgraded itself.
 const (
 	Self      = "/usr/bin/dovy"
 	Restarted = "DOVY_RESTARTED"
@@ -40,7 +38,9 @@ const (
 const usage = `usage: dovy <command> [arguments]
 
 Commands:
-  install <recipe>...  plan, confirm, install
+  install <recipe>...  plan, confirm, install; --reinstall installs again
+                       what is installed, --restore-config also brings
+                       back dovy's config files
   remove <recipe>...   plan, confirm, remove
   update               fetch and verify the catalog; changes nothing
   upgrade              one plan for everything
@@ -48,20 +48,20 @@ Commands:
   search <word>        search names and descriptions
   show <recipe>        details; --recipe prints the recipe, --diff the changes
   check                report problems; changes nothing
+  clean                delete dovy's downloads and builds in your cache
 
 Options:
   --help     this help
   --version  dovy's version
 `
 
-// command is one entry of the command set (principles topic 9).
 type command struct {
 	usage string
 	valid func(args []string) string // "" or a usage error
 }
 
 var commands = map[string]command{
-	"install": {"install <recipe>...", recipes},
+	"install": {"install [--reinstall [--restore-config]] <recipe>...", installArgs},
 	"remove":  {"remove <recipe>...", recipes},
 	"update":  {"update", none},
 	"upgrade": {"upgrade", none},
@@ -69,6 +69,7 @@ var commands = map[string]command{
 	"search":  {"search <word>", search},
 	"show":    {"show <recipe> [--recipe | --diff]", show},
 	"check":   {"check", none},
+	"clean":   {"clean", none},
 }
 
 func none(args []string) string {
@@ -86,6 +87,29 @@ func recipes(args []string) string {
 		if strings.HasPrefix(a, "-") {
 			return "unknown option " + a
 		}
+	}
+	return ""
+}
+
+// Recipes and reinstall options may come in any order.
+func installArgs(args []string) string {
+	var names []string
+	opts := map[string]bool{}
+	for _, a := range args {
+		switch {
+		case a == "--reinstall" || a == "--restore-config":
+			opts[a] = true
+		case strings.HasPrefix(a, "-"):
+			return "unknown option " + a
+		default:
+			names = append(names, a)
+		}
+	}
+	switch {
+	case len(names) == 0:
+		return "needs at least one recipe"
+	case opts["--restore-config"] && !opts["--reinstall"]:
+		return "--restore-config needs --reinstall"
 	}
 	return ""
 }
@@ -134,9 +158,8 @@ func show(args []string) string {
 	return ""
 }
 
-// Ctrl-C outside an apt run cancels (8.10): temporary folders go and
-// nothing has changed. During apt, apt.Run answers; while holding, the
-// transaction's last steps finish.
+// Ctrl-C outside apt cancels; during apt, apt.Run answers; while holding,
+// the transaction's last steps finish.
 var (
 	tempMu  sync.Mutex
 	temps   []string
@@ -214,7 +237,7 @@ func run(args []string, a *app, euid int) int {
 		fmt.Fprintf(errs.Out, "dovy %s: %s\nusage: dovy %s\n", args[0], msg, c.usage)
 		return exitUsage
 	}
-	// Topic 2, rule 9: dovy runs as the user and asks for sudo itself.
+	// dovy runs as the user and asks for sudo itself.
 	if euid == 0 {
 		errs.Fail("dovy runs as root", "unchanged",
 			"run dovy as a regular user; it asks for sudo when needed", "")
@@ -237,6 +260,8 @@ func run(args []string, a *app, euid int) int {
 		return a.upgrade()
 	case "check":
 		return a.check()
+	case "clean":
+		return a.clean()
 	}
 	panic("dovy: command " + args[0] + " has no handler") // every entry of commands has one
 }

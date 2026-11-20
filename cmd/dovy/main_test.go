@@ -34,7 +34,12 @@ func TestRun(t *testing.T) {
 		{"frobnicate", 1000, exitUsage, "unknown command frobnicate"},
 		{"install", 1000, exitUsage, "needs at least one recipe"},
 		{"install steam --yes", 1000, exitUsage, "unknown option --yes"},
-		{"install --help", 1000, exitOK, "usage: dovy install <recipe>..."},
+		{"install --help", 1000, exitOK, "usage: dovy install [--reinstall [--restore-config]] <recipe>..."},
+		{"install --reinstall", 1000, exitUsage, "needs at least one recipe"},
+		{"install --restore-config steam", 1000, exitUsage, "--restore-config needs --reinstall"},
+		{"install steam --reinstall --force", 1000, exitUsage, "unknown option --force"},
+		{"install --reinstall steam", 1000, exitFailed, "no catalog yet"},
+		{"clean now", 1000, exitUsage, "takes no arguments"},
 		{"update now", 1000, exitUsage, "takes no arguments"},
 		{"list --installed --updates", 1000, exitUsage, "one filter at most"},
 		{"list --all", 1000, exitUsage, "unknown filter --all"},
@@ -70,7 +75,6 @@ func fixtureURL(name string) string {
 	return p
 }
 
-// withCatalog returns an app whose catalog is the named fixture bundle.
 func withCatalog(t *testing.T, name string, inst map[string]string) (*app, *bytes.Buffer) {
 	t.Helper()
 	bundle := fixtureURL(name)
@@ -109,6 +113,9 @@ func TestCommands(t *testing.T) {
 		{"show steam --recipe", exitOK, []string{"steam/recipe.toml", "sha256 = "}},
 		{"show zram --diff", exitFailed, []string{"zram is not installed"}},
 		{"show vlc", exitFailed, []string{"no recipe vlc", "dovy search vlc"}},
+		// dpkg has no zram here: config files are restored only by a reinstall.
+		{"install --reinstall --restore-config zram", exitRefused, []string{"--restore-config needs it installed at the catalog's version",
+			"dovy install zram, then: dovy install --reinstall --restore-config zram"}},
 	}
 	for _, c := range cases {
 		b.Reset()

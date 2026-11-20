@@ -19,8 +19,7 @@ var sysRoot = "/"
 // openModule is the package whose planned version picks NVIDIA's table.
 const openModule = "nvidia-kernel-open-dkms"
 
-// unavailable is why r cannot run on this machine, checked without the
-// network: its own hardware check or one it inherits (6.7); "" if none.
+// unavailable runs r's hardware check, or an inherited one, without the network.
 func unavailable(r *catalog.Recipe, rs map[string]*catalog.Recipe) string {
 	seen := map[string]bool{}
 	var walk func(r *catalog.Recipe) string
@@ -42,8 +41,10 @@ func unavailable(r *catalog.Recipe, rs map[string]*catalog.Recipe) string {
 	return walk(r)
 }
 
-// machine runs r's own check, without the network.
 func machine(r *catalog.Recipe) string {
+	if r.Kind == catalog.LocalBuild && r.Input == "" { // set by load
+		return "no " + strings.Join(r.Local.Match, ", ") + " files in " + r.Local.Path
+	}
 	if r.Hardware != "nvidia-turing" {
 		return ""
 	}
@@ -57,8 +58,8 @@ func machine(r *catalog.Recipe) string {
 	return ""
 }
 
-// turing checks every NVIDIA GPU against NVIDIA's open-module table at the
-// version apt plans to install (5.6, ADR 0017); "" when they all pass.
+// turing checks every NVIDIA GPU against the open-module table at the version
+// apt plans to install (ADR 0017).
 func (t *txn) turing() (string, error) {
 	need := false
 	for _, r := range t.build {
@@ -102,8 +103,7 @@ func (t *txn) turing() (string, error) {
 	return "", nil
 }
 
-// secureBoot explains what recipes need under Secure Boot (1.4); dovy
-// runs nothing for it.
+// dovy runs nothing for Secure Boot; it only explains what recipes need.
 func secureBoot(rs []*catalog.Recipe) []ui.Pair {
 	var p []ui.Pair
 	if !hardware.SecureBoot(sysRoot) {
@@ -130,9 +130,8 @@ func enrolled(key string) bool {
 	return strings.Contains(string(out), "is already enrolled")
 }
 
-// platform finds what NVIDIA's packages replace (ADR 0017): removals that
-// a package from an unpinned repository conflicts with, breaks or replaces
-// are expected; the recipe records them and the shared names it upgrades.
+// Removals that an unpinned repository's package conflicts with, breaks or
+// replaces are expected (ADR 0017).
 func (t *txn) platform() {
 	if len(t.unpinned) == 0 {
 		return
@@ -219,7 +218,6 @@ func mark(manual bool) string {
 	return "auto"
 }
 
-// listsDir is where apt keeps the indexes this run uses.
 func (t *txn) listsDir() string {
 	for _, o := range t.opts {
 		if v, ok := strings.CutPrefix(o, "Dir::State::Lists="); ok {
@@ -229,8 +227,7 @@ func (t *txn) listsDir() string {
 	return "/var/lib/apt/lists"
 }
 
-// originOf reads the Label of host's Release file in lists, as apt's
-// simulation names it (Origin when there is no Label).
+// apt's simulation names a source by its Release Label, or Origin without one.
 func originOf(lists, host string) string {
 	m, _ := filepath.Glob(filepath.Join(lists, host+"_*Release"))
 	for _, p := range m {
@@ -254,8 +251,6 @@ func originOf(lists, host string) string {
 	return ""
 }
 
-// relNames reads package names from relation fields, without versions or
-// architectures.
 func relNames(v string) []string {
 	var n []string
 	for _, rel := range strings.Split(v, ",") {

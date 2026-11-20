@@ -27,7 +27,6 @@ import (
 // Set in test builds: -ldflags "-X main.kernelRelease=7.2.12+bpo-amd64".
 var kernelRelease = ""
 
-// runningKernel is the running kernel's release, as `uname -r` prints it.
 func runningKernel() string {
 	if kernelRelease != "" {
 		return kernelRelease
@@ -36,37 +35,42 @@ func runningKernel() string {
 	return strings.TrimSpace(string(b))
 }
 
-// txn is one dovy operation: what to build, what apt is asked, and what the
-// plan allows apt to do (principles 8.3).
+// txn is one operation: what to build, what apt is asked, and what the plan
+// allows apt to do.
 type txn struct {
-	verb     string            // install, remove
-	names    []string          // the recipes asked for
-	release  int               // Debian release, for versions
-	build    []*catalog.Recipe // recipes and capabilities to build, in order
-	versions map[string]string // dovy packages to install -> version
-	caps     map[string]bool   // capability packages, installed first (8.3.7)
-	request  []string          // more apt-get install arguments: pkg/suite, pkg=ver, pkg-
-	removing map[string]string // packages the plan removes -> note
-	down     map[string]bool   // packages the plan downgrades (4.6)
-	opts     []string          // apt options while a new source is not installed
-	inst     map[string]pkgInfo
-	system   []ui.Pair                            // System changes (12.2)
-	kept     []ui.Pair                            // Kept (12.2)
-	keepFor  func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
-	notes    []*catalog.Recipe                    // per-user steps after install
-	prebuilt map[string]string                    // recipe -> .deb already built (vendor .debs, repacks)
-	parts    map[string]string                    // package -> .deb of a recipe with several (ADR 0018), installed as dependencies
-	leftover string                               // notice after remove (4.7)
-	restored map[string]string                    // replaced packages coming back -> mark (ADR 0016)
-	unpinned []string                             // hosts of unpinned repositories (ADR 0017)
-	sbNotes  []ui.Pair                            // Secure Boot notes (1.4)
-	notices  []ui.Pair                            // what needs the user, after the run
+	verb      string            // install, remove
+	options   []string          // the command's options, e.g. --reinstall: on retries and in the journal
+	names     []string          // the recipes asked for
+	release   int               // Debian release, for versions
+	build     []*catalog.Recipe // recipes and capabilities to build, in order
+	versions  map[string]string // dovy packages to install -> version
+	caps      map[string]bool   // capability packages, installed first
+	request   []string          // more apt-get install arguments: pkg/suite, pkg=ver, pkg-
+	removing  map[string]string // packages the plan removes -> note
+	down      map[string]bool   // packages the plan downgrades
+	opts      []string          // apt options while a new source is not installed
+	inst      map[string]pkgInfo
+	system    []ui.Pair                            // System changes
+	kept      []ui.Pair                            // Kept
+	keepFor   func(gone map[string]bool) []ui.Pair // Kept, once apt's plan is known
+	notes     []*catalog.Recipe                    // per-user steps after install
+	prebuilt  map[string]string                    // recipe -> .deb already built (vendor .debs, repacks)
+	parts     map[string]string                    // package -> .deb of a recipe with several, installed as dependencies (ADR 0018)
+	leftover  string                               // notice after remove
+	restored  map[string]string                    // replaced packages coming back -> mark (ADR 0016)
+	unpinned  []string                             // hosts of unpinned repositories (ADR 0017)
+	sbNotes   []ui.Pair                            // Secure Boot notes
+	notices   []ui.Pair                            // what needs the user, after the run
+	reinstall map[string]bool                      // installed packages installed again (--reinstall)
+	fromRepo  map[string]bool                      // recipes reinstalled from the local repository's copy, not built
+	restoring bool                                 // --restore-config
+	configs   []string                             // config files moved aside, then recreated (--restore-config)
 
 	tmp      string
 	actions  []apt.Action
 	unused   map[string]bool
-	final    map[string]bool // purged after the transaction: i386 packages, then dovy-i386 (4.8)
-	warnings []string        // repeated in Notices (12.4)
+	final    map[string]bool // purged after the transaction: i386 packages, then dovy-i386
+	warnings []string        // repeated in Notices
 }
 
 // sourceOpts keeps only the source and list options, for root's download.
@@ -81,9 +85,8 @@ func (t *txn) sourceOpts() []string {
 	return o
 }
 
-// withConfig sets up a temporary apt configuration as the user: the
-// system's sources, pins and lists, with c's changes, so apt can plan before
-// anything changes (8.3.3).
+// withConfig lets apt plan as the user before anything changes: the system's
+// sources, pins and lists, with c's changes.
 func (t *txn) withConfig(c *simConfig) error {
 	dir := filepath.Join(t.tmp, "apt")
 	parts, prefs, keys, lists := filepath.Join(dir, "parts"), filepath.Join(dir, "prefs"), filepath.Join(dir, "keys"), filepath.Join(dir, "lists")
@@ -120,8 +123,7 @@ func (t *txn) withConfig(c *simConfig) error {
 	if c.i386 {
 		t.opts = append(t.opts, "-o", "APT::Architectures::=amd64", "-o", "APT::Architectures::=i386")
 	}
-	// Only what is new is fetched: the system's lists are already there.
-	// A new architecture needs every source again.
+	// A new architecture needs every source fetched again.
 	update := append([]string{"-q"}, t.opts...)
 	if !c.i386 {
 		fresh := filepath.Join(dir, "fresh")
@@ -144,12 +146,22 @@ func (t *txn) withConfig(c *simConfig) error {
 }
 
 func (t *txn) args(stubs []string) []string {
-	a := []string{"install", "--allow-downgrades"}
+	a := append([]string{"install"}, t.flags()...)
 	return append(append(a, stubs...), t.request...)
 }
 
-// asked is the packages t.request names. A package only expected to go
-// (expectWith) is not among them: apt must still be asked.
+func (t *txn) flags() []string {
+	if len(t.reinstall) > 0 {
+		return []string{"--allow-downgrades", "--reinstall"}
+	}
+	return []string{"--allow-downgrades"}
+}
+
+func (t *txn) retry() string {
+	return strings.Join(append(append([]string{"dovy", t.verb}, t.options...), t.names...), " ")
+}
+
+// A package only expected to go (expectWith) is not included: apt must still be asked.
 func (t *txn) asked() map[string]bool {
 	m := map[string]bool{}
 	for _, r := range t.request {
@@ -158,7 +170,7 @@ func (t *txn) asked() map[string]bool {
 	return m
 }
 
-// simulate resolves the plan with apt, adding what it leaves unused (4.1).
+// simulate also adds what the plan leaves unused.
 func (t *txn) simulate(stubs []string) error {
 	var base string
 	var berr error
@@ -205,8 +217,8 @@ func (t *txn) simulate(stubs []string) error {
 	return nil
 }
 
-// check lists what apt would do beyond the plan (4.3); kernel is the running
-// kernel's package when the plan removes it (5.8).
+// check lists what apt would do beyond the plan; kernel is set when the plan
+// removes the running kernel's package.
 func (t *txn) check() (surprises []string, kernel string) {
 	running := runningKernel()
 	for _, x := range t.actions {
@@ -227,7 +239,6 @@ func (t *txn) check() (surprises []string, kernel string) {
 	return surprises, kernel
 }
 
-// sections turns the plan into the tables of topic 12, rule 1.
 func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]ui.Section, []ui.Count, []ui.Pair) {
 	var ins, deps, down, rm, rmDeps []ui.Row
 	var download, disk int64
@@ -243,6 +254,8 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 			switch {
 			case t.caps[x.Name]:
 				note = "capability"
+			case t.reinstall[x.Name]:
+				note = "reinstall"
 			case x.Old != "" && t.inst[x.Name].Recipe == "":
 				note = "replaces " + x.Old
 			}
@@ -319,8 +332,7 @@ func (t *txn) sections(sizes map[string]apt.Size, sources map[string]int64) ([]u
 	return secs, counts, totals
 }
 
-// sourceSizes is each package's download size: all servers asked at once;
-// a file already in the cache answers for itself.
+// All servers are asked at once; a file already in the cache answers for itself.
 func sourceSizes(rs []*catalog.Recipe) map[string]int64 {
 	cache, _ := build.CacheDir()
 	var mu sync.Mutex
@@ -349,7 +361,6 @@ func sourceSizes(rs []*catalog.Recipe) map[string]int64 {
 	return sizes
 }
 
-// lastLine is the last line of a build's log so far.
 func lastLine(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -364,7 +375,6 @@ func lastLine(path string) string {
 	return lines[len(lines)-1]
 }
 
-// same reports whether two simulations do the same, ignoring packages in skip.
 func same(a, b []apt.Action, skip map[string]bool) bool {
 	key := func(as []apt.Action) string {
 		var s []string
@@ -379,17 +389,20 @@ func same(a, b []apt.Action, skip map[string]bool) bool {
 	return key(a) == key(b)
 }
 
-// run plans, confirms and carries out t (8.3).
 func (a *app) run(t *txn) int {
 	what := strings.Join(t.names, " ")
-	again := "dovy " + t.verb + " " + what
+	again := t.retry()
+	var fetched []*catalog.Recipe // what is downloaded: not a reinstall's local copy
+	for _, r := range t.build {
+		if !t.fromRepo[r.Name] {
+			fetched = append(fetched, r)
+		}
+	}
 	sized := make(chan map[string]int64, 1)
-	go func() { sized <- sourceSizes(t.build) }() // while apt plans
+	go func() { sized <- sourceSizes(fetched) }() // while apt plans
 
-	// Resolve packages: apt simulates with control-only stubs; a source
-	// build's stub depends on the recipe's packages. A vendor .deb's
-	// dependencies are its own: it is fetched and repacked now, into the
-	// user's cache, and planned as itself.
+	// apt plans with control-only stubs; a vendor .deb has its own dependencies,
+	// so it is fetched and repacked now.
 	var stubs []string
 	for _, r := range t.build {
 		if d := t.prebuilt[r.Name]; d != "" {
@@ -453,6 +466,13 @@ func (a *app) run(t *txn) int {
 		}
 		stubs = append(stubs, s)
 	}
+	// A reinstall from the local repository names its parts as the final
+	// run does, so apt plans them again too.
+	for _, p := range sortedKeys(t.parts) {
+		if t.reinstall[p] && !contains(stubs, t.parts[p]) {
+			stubs = append(stubs, t.parts[p])
+		}
+	}
 	a.at("asking apt")
 	if err := t.simulate(stubs); err != nil {
 		a.errs.Refuse(what, "apt cannot do it", err.Error())
@@ -489,7 +509,7 @@ func (a *app) run(t *txn) int {
 		t.kept = append(t.keepFor(gone), t.kept...)
 	}
 
-	// Plan, confirm (12.1, 12.2).
+	// Plan, confirm.
 	debian := map[string]string{}
 	for _, x := range t.actions {
 		if x.Op == "Inst" && t.versions[x.Name] == "" {
@@ -501,6 +521,7 @@ func (a *app) run(t *txn) int {
 	secs, counts, totals := t.sections(apt.Sizes(t.opts, debian), sources)
 	a.wait.Stop()
 	if len(secs) == 0 {
+		t.dropBuilt()
 		fmt.Fprintln(a.out.Out, "Nothing to do.")
 		return exitOK
 	}
@@ -518,12 +539,13 @@ func (a *app) run(t *txn) int {
 	a.out.Summary(counts, totals)
 	a.out.Blank()
 	if !a.out.Confirm(a.in) {
+		t.dropBuilt()
 		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
 		return exitCancelled
 	}
 	a.out.Blank()
 
-	// sudo once, kept fresh for the run (8.11); one dovy at a time (8.4).
+	// sudo once, kept fresh for the run; one dovy at a time.
 	stop, err := a.sudo()
 	if err != nil {
 		a.errs.Fail("sudo: "+err.Error(), "unchanged", again, "")
@@ -559,7 +581,9 @@ func (a *app) run(t *txn) int {
 	logPath := filepath.Join(log.Dir, filepath.Base(logf.Name()))
 	defer func() {
 		logf.Sync()
-		a.root("install", "-D", "-m", "644", logf.Name(), logPath)
+		if a.root("install", "-D", "-m", "644", logf.Name(), logPath) == nil {
+			a.pruneLogs()
+		}
 	}()
 	fail := func(failed, system, next string) int {
 		fmt.Fprintln(logf, "Failed: "+failed)
@@ -574,14 +598,14 @@ func (a *app) run(t *txn) int {
 		return cmd.Run()
 	}
 
-	// Download (12.3).
+	// Download.
 	cache, err := build.CacheDir()
 	if err != nil {
 		return fail(err.Error(), "unchanged", "set HOME or XDG_CACHE_HOME")
 	}
 	if len(sources) > 0 || len(debian) > 0 {
 		a.out.Rule("", "Download")
-		for _, r := range t.build {
+		for _, r := range fetched {
 			for _, s := range r.Sources {
 				l := a.fetching(s.URL)
 				path, err := fetch.Get(s.URL, s.SHA256, filepath.Join(cache, "sources"))
@@ -605,7 +629,7 @@ func (a *app) run(t *txn) int {
 		a.out.Blank()
 	}
 
-	// Build (12.3), into the local repository.
+	// Build, into the local repository.
 	var debs []string
 	for _, r := range t.build {
 		a.out.Rule("", "Build: "+r.Name)
@@ -634,8 +658,13 @@ func (a *app) run(t *txn) int {
 					"report it to the recipe's maintainer ("+r.Maintainer+"): add them to packages")
 			}
 		}
-		fmt.Fprintln(logf, "Built: "+d)
-		a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)%s", r.Package(), t.versions[r.Package()], built))
+		if t.fromRepo[r.Name] {
+			fmt.Fprintln(logf, "Reused: "+d)
+			a.out.Say(ui.Green, "Reused:", fmt.Sprintf("%s (%s) from the local repository", r.Package(), t.versions[r.Package()]))
+		} else {
+			fmt.Fprintln(logf, "Built: "+d)
+			a.out.Say(ui.Green, "Built:", fmt.Sprintf("%s (%s)%s", r.Package(), t.versions[r.Package()], built))
+		}
 		debs = append(debs, d)
 		a.out.Blank()
 	}
@@ -655,16 +684,16 @@ func (a *app) run(t *txn) int {
 		}
 	}
 
-	if apt.Interrupted() { // Ctrl-C during the download (8.10)
+	if apt.Interrupted() { // Ctrl-C during the download
 		fmt.Fprintln(a.out.Out, "Cancelled. Nothing changed.")
 		return exitCancelled
 	}
 
-	// Journal, capabilities, apt update, one transaction (8.3).
+	// Journal, capabilities, apt update, one transaction.
 	holding.Store(true)
 	defer holding.Store(false)
 	a.out.Rule("", strings.ToUpper(t.verb[:1])+t.verb[1:])
-	j := &state.Journal{Command: t.verb, Recipes: t.names, Started: time.Now().UTC()}
+	j := &state.Journal{Command: t.verb, Options: t.options, Recipes: t.names, Started: time.Now().UTC()}
 	for _, x := range t.actions {
 		j.Packages = append(j.Packages, state.Package{Name: x.Name, Version: x.Version})
 	}
@@ -702,7 +731,7 @@ func (a *app) run(t *txn) int {
 		if err := apt.Run(logf, a.aptLine(versions, nil), append(append([]string{"install", "-y"}, apt.Options...), caps...)...); err != nil {
 			return fail(err.Error(), "unknown: the operation stopped during apt", "sudo dpkg --configure -a")
 		}
-		// Capabilities come and go with the recipes that need them (5.1).
+		// Capabilities come and go with the recipes that need them.
 		if err := mark(append([]string{"auto"}, names...)...); err != nil {
 			return fail(err.Error(), "capabilities installed", "sudo apt-mark auto "+strings.Join(names, " "))
 		}
@@ -712,7 +741,9 @@ func (a *app) run(t *txn) int {
 	}
 	var dovy []string
 	for p, v := range t.versions {
-		if !t.caps[p] && t.parts[p] == "" { // parts come as dependencies, automatic
+		// Parts come as dependencies, automatic; a reinstall names them,
+		// and their mark is put back after.
+		if !t.caps[p] && (t.parts[p] == "" || t.reinstall[p]) {
 			dovy = append(dovy, p+"="+v)
 		}
 	}
@@ -730,7 +761,7 @@ func (a *app) run(t *txn) int {
 	for p := range t.final {
 		skip[p] = true
 	}
-	out, err := apt.Simulate(nil, append([]string{"install", "--allow-downgrades"}, args...)...)
+	out, err := apt.Simulate(nil, append(append([]string{"install"}, t.flags()...), args...)...)
 	if err != nil || !same(apt.Parse(out), t.actions, skip) {
 		clear()
 		return fail("apt's plan changed after the build", "unchanged; built packages kept in "+repo.Dir, again)
@@ -739,9 +770,23 @@ func (a *app) run(t *txn) int {
 		clear()
 		return code
 	}
+	opts := apt.Options
+	if len(t.configs) > 0 { // --restore-config: edited ones aside, dpkg recreates them
+		for _, c := range t.configs {
+			if _, err := os.Lstat(c); err != nil {
+				continue // deleted: recreated as it is
+			}
+			if err := a.root("mv", "-f", c, c+".dpkg-old"); err != nil {
+				clear()
+				return fail(err.Error(), "unchanged but config files before "+c+", moved to <file>.dpkg-old", "run the same command again: it recreates them: "+again)
+			}
+			fmt.Fprintln(logf, "Moved: "+c+" -> "+c+".dpkg-old")
+		}
+		opts = apt.RestoreConfig()
+	}
 	doing := map[string][2]string{"install": {ui.Green, "Installing"}, "remove": {ui.Red, "Removing"}, "upgrade": {ui.Green, "Upgrading"}}[t.verb]
 	l := a.stepping(doing[0], doing[1])
-	err = apt.Run(logf, a.aptLine(versions, &t.warnings), append(append([]string{"install", "-y", "--allow-downgrades"}, apt.Options...), args...)...)
+	err = apt.Run(logf, a.aptLine(versions, &t.warnings), append(append(append([]string{"install", "-y"}, t.flags()...), opts...), args...)...)
 	l.Stop()
 	if err != nil {
 		return fail(err.Error(), "unknown: the operation stopped during apt", "run dovy again: it offers to recover")
@@ -750,8 +795,8 @@ func (a *app) run(t *txn) int {
 		return fail("stopped after the apt transaction (Ctrl-C)", "apt transaction complete; later steps not run", "run dovy again: it finishes the plan")
 	}
 
-	// dovy's own packages are purged (4.4), sources before the next apt
-	// update; the repository drops them.
+	// dovy's own packages are purged, sources before the next apt update; the
+	// repository drops them.
 	var gone []string
 	all := map[string]string{}
 	for p := range t.removing {
@@ -769,7 +814,7 @@ func (a *app) run(t *txn) int {
 		i, _ := installedAs(t.inst, p)
 		own := i.Recipe != "" || i.Capability != ""
 		if !own && (t.verb != "remove" || changedConfig(p)) {
-			continue // Debian's upgrade removes as apt does; config the user changed stays (4.4)
+			continue // Debian's upgrade removes as apt does; config the user changed stays
 		}
 		if own {
 			gone = append(gone, p)
@@ -785,7 +830,7 @@ func (a *app) run(t *txn) int {
 	}
 
 	// i386 packages, then dovy-i386, whose postrm removes the architecture
-	// once none is left (4.8).
+	// once none is left.
 	if len(t.final) > 0 {
 		var i386 []string
 		known, _ := exec.Command("dpkg-query", "-W", "-f", "${binary:Package}\n").Output()
@@ -818,7 +863,7 @@ func (a *app) run(t *txn) int {
 		}
 	}
 
-	// Packages named only to pick a version stay automatic (3.4).
+	// Packages named only to pick a version stay automatic.
 	var auto []string
 	for _, r := range t.request {
 		n := strings.FieldsFunc(r, func(c rune) bool { return c == '/' || c == '=' })[0]
@@ -826,6 +871,14 @@ func (a *app) run(t *txn) int {
 			auto = append(auto, n)
 		}
 	}
+	var wasAuto []string
+	for p := range t.reinstall {
+		if !manual[p] { // named to reinstall, which apt marks manual
+			wasAuto = append(wasAuto, p)
+		}
+	}
+	sort.Strings(wasAuto)
+	auto = append(auto, wasAuto...)
 	marks := map[string][]string{}
 	for _, n := range auto {
 		if t.restored[n] == "" {
@@ -850,6 +903,8 @@ func (a *app) run(t *txn) int {
 		}
 	}
 	clear()
+	t.dropBuilt(debs...)
+	a.pruneCache()
 	a.out.Blank()
 	if len(t.warnings) > 0 {
 		a.out.Rule(ui.Yellow, "Notices")
@@ -870,6 +925,9 @@ func (a *app) run(t *txn) int {
 	}
 	a.showNotices(t.notices)
 	verb := map[string]string{"install": "installed", "remove": "removed", "upgrade": "upgraded"}[t.verb]
+	if len(t.reinstall) > 0 {
+		verb = "reinstalled"
+	}
 	if len(t.names) == 0 {
 		t.names = []string{"Debian packages"}
 	}
@@ -877,9 +935,8 @@ func (a *app) run(t *txn) int {
 	return exitOK
 }
 
-// overlaps checks the files of every package from outside Debian against
-// installed packages that stay (ADR 0016): dovy's builds, and vendor
-// packages apt just downloaded.
+// overlaps checks dovy's builds and the vendor packages apt just downloaded
+// against installed packages that stay (ADR 0016).
 func (t *txn) overlaps(built []string) ([]string, error) {
 	paths := append([]string{}, built...)
 	leaving := map[string]bool{}
@@ -913,9 +970,7 @@ func (t *txn) overlaps(built []string) ([]string, error) {
 	return out, nil
 }
 
-// unplanned lists what a built package depends on that is neither installed
-// nor in the plan: the recipe's packages missed it, so apt's plan would
-// change after confirmation.
+// A missed dependency would change apt's plan after confirmation.
 func (t *txn) unplanned(deb string) []string {
 	out, err := exec.Command("dpkg-deb", "-f", deb, "Depends", "Pre-Depends").Output()
 	if err != nil {
@@ -948,7 +1003,6 @@ func (t *txn) unplanned(deb string) []string {
 	return missing
 }
 
-// archived is the .deb apt downloaded for x.
 func archived(x apt.Action) []string {
 	name, arch, _ := strings.Cut(x.Name, ":")
 	if arch == "" {
@@ -959,8 +1013,7 @@ func archived(x apt.Action) []string {
 	return m
 }
 
-// preconfigure asks packages' questions before the install, on the terminal
-// (8.11): dpkg-preconfigure on the exact .debs. The install then runs
+// dpkg-preconfigure asks on the terminal first, so the install runs
 // non-interactively with the answers.
 func (a *app) preconfigure(t *txn, built []string, logf *os.File) int {
 	debs := append([]string{}, built...)

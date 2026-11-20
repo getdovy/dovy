@@ -22,8 +22,7 @@ import (
 	"github.com/getdovy/dovy/internal/ui"
 )
 
-// resolve returns the named recipes, their depends and bundle members,
-// dependencies first.
+// resolve adds depends and bundle members, dependencies first.
 func resolve(rs map[string]*catalog.Recipe, names []string) ([]*catalog.Recipe, string) {
 	var order []*catalog.Recipe
 	seen := map[string]bool{}
@@ -53,9 +52,17 @@ func resolve(rs map[string]*catalog.Recipe, names []string) ([]*catalog.Recipe, 
 	return order, ""
 }
 
-// install plans recipes and their depends, with capabilities, pins and
-// pairs (principles 1.4, 5).
-func (a *app) install(names []string) int {
+func (a *app) install(args []string) int {
+	var names, opts []string
+	for _, x := range args {
+		if strings.HasPrefix(x, "-") {
+			opts = append(opts, x)
+		} else {
+			names = append(names, x)
+		}
+	}
+	reinstall, restore := contains(opts, "--reinstall"), contains(opts, "--restore-config")
+	retry := "dovy install " + strings.Join(args, " ")
 	if code := a.unfinished(); code != exitOK {
 		return code
 	}
@@ -86,7 +93,7 @@ func (a *app) install(names []string) int {
 		return exitFailed
 	}
 	byRecipe := recipePackages(inst)
-	// Hardware first, without the network; dependents inherit (6.7).
+	// Hardware first, without the network; dependents inherit.
 	var refused []string
 	why := ""
 	for _, r := range order {
@@ -98,11 +105,11 @@ func (a *app) install(names []string) int {
 		a.errs.Refuse(strings.Join(refused, ", "), why, "")
 		return exitRefused
 	}
-	t := &txn{verb: "install", release: release, versions: map[string]string{}, caps: map[string]bool{},
+	t := &txn{verb: "install", options: opts, restoring: restore, release: release, versions: map[string]string{}, caps: map[string]bool{},
 		removing: map[string]string{}, down: map[string]bool{}, inst: inst}
 	needs := map[string][]string{} // capability -> recipes
 	// A bundle member whose other half is installed or asked for is skipped:
-	// the user's choice stands (6.8).
+	// the user's choice stands.
 	member := map[string]string{}
 	for _, r := range order {
 		for _, m := range r.Members {
@@ -138,8 +145,17 @@ func (a *app) install(names []string) int {
 			return exitRefused
 		}
 		v := deb.Version(r, release)
+		again := false // installed as the catalog has it: only --reinstall goes on
 		if p, ok := byRecipe[r.Name]; ok && inst[p].Version == v {
-			continue
+			if !reinstall || !contains(names, r.Name) {
+				continue
+			}
+			again = true
+		} else if restore && contains(names, r.Name) {
+			// --force-confmiss would act on every package apt installs:
+			// only a reinstall of what is there may restore config files.
+			a.errs.Refuse(r.Name, "--restore-config needs it installed at the catalog's version", "dovy install "+r.Name+", then: dovy install --reinstall --restore-config "+r.Name)
+			return exitRefused
 		}
 		t.names = append(t.names, r.Name)
 		if build.Sourced(r) {
@@ -147,10 +163,17 @@ func (a *app) install(names []string) int {
 			if r.Network != "" {
 				why = "network: " + r.Network
 			}
-			t.system = append(t.system, ui.Pair{Item: "built from source in the sandbox", Reason: r.Name + " (" + why + ")"})
+			item := "built from source in the sandbox"
+			if r.Local != nil {
+				item, why = "built from your files in the sandbox", r.Local.Path+", read only; "+why
+			}
+			t.system = append(t.system, ui.Pair{Item: item, Reason: r.Name + " (" + why + ")"})
 		}
 		x := capability.Expand(r, rs, codename)
 		t.replace(x, byRecipe, inst)
+		if again {
+			t.again(r, v, inst)
+		}
 		t.build = append(t.build, x)
 		t.versions[r.Package()] = v
 		if r.UserNotes != "" {
@@ -159,7 +182,7 @@ func (a *app) install(names []string) int {
 		for _, c := range r.Needs() {
 			needs[c] = append(needs[c], r.Name)
 		}
-		if r.Backports {
+		if r.Backports && !again { // a reinstall installs dovy's package only
 			for _, p := range r.Packages {
 				t.request = append(t.request, p+"/"+codename+"-backports")
 			}
@@ -179,13 +202,13 @@ func (a *app) install(names []string) int {
 	track(tmp)
 	t.tmp = tmp
 
-	// Capabilities, built from the system's sources (5.1–5.4), and vendor
-	// repositories, keys checked now (2.4, 5.10).
+	// Capabilities are built from the system's sources; vendor repository keys
+	// are checked now.
 	t.inst = inst
 	a.at("sources")
 	sim := newSimConfig()
 	if err := t.capabilities(needs, codename, sim); err != nil {
-		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
+		a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: "+retry, "")
 		return exitFailed
 	}
 	using := map[string]bool{} // recipes installed or coming
@@ -199,10 +222,10 @@ func (a *app) install(names []string) int {
 			users[r.Repo] = append(users[r.Repo], r.Name)
 		}
 	}
-	// Repacked repositories (ADR 0014): the package is downloaded and
-	// repacked now, and planned as itself.
+	// Repacked packages are downloaded and repacked now, then planned as
+	// themselves (ADR 0014).
 	for _, r := range order {
-		if r.Repo == nil || !r.Repo.Repack || !contains(t.names, r.Name) {
+		if r.Repo == nil || !r.Repo.Repack || !contains(t.names, r.Name) || t.fromRepo[r.Name] {
 			continue
 		}
 		cache, err := build.CacheDir()
@@ -213,7 +236,7 @@ func (a *app) install(names []string) int {
 		a.at("fetching " + r.Name)
 		d, v, refusal, err := t.repacked(r, cache)
 		if err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
+			a.errs.Fail(err.Error(), "unchanged", "check the network, then: "+retry, "")
 			return exitFailed
 		}
 		if refusal[0] != "" {
@@ -230,7 +253,7 @@ func (a *app) install(names []string) int {
 	for q, who := range users {
 		refusal, err := t.repository(q, repoPackages(q, rs, using), nil, strings.Join(who, ", "), sim)
 		if err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "check the network, then: dovy install "+strings.Join(names, " "), "")
+			a.errs.Fail(err.Error(), "unchanged", "check the network, then: "+retry, "")
 			return exitFailed
 		}
 		if refusal[0] != "" {
@@ -241,13 +264,13 @@ func (a *app) install(names []string) int {
 	if !sim.empty() {
 		a.at("reading new sources")
 		if err := t.withConfig(sim); err != nil {
-			a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: dovy install "+strings.Join(names, " "), "")
+			a.errs.Fail(err.Error(), "unchanged", "check /etc/apt and the network, then: "+retry, "")
 			return exitFailed
 		}
 	}
 
-	// Pairs: the other half goes, and its backports packages return to
-	// stable unless this half keeps them on backports (1.4, 4.6).
+	// Pairs: the other half goes; its backports packages return to stable
+	// unless this half keeps them on backports.
 	for _, x := range t.build {
 		r := rs[x.Name]
 		if r == nil {
@@ -260,6 +283,7 @@ func (a *app) install(names []string) int {
 			}
 			t.removing[p] = "replaced by " + r.Name
 			t.request = append(t.request, p+"-")
+			x.Replaced = inherit(x, inst[p].Replaced)
 			if o := rs[c]; o != nil {
 				t.expectWith(o, inst)
 			}
@@ -271,9 +295,84 @@ func (a *app) install(names []string) int {
 	return a.run(t)
 }
 
-// replace records the Debian packages r replaces that are installed, with
-// their mark, and removes those of another name (ADR 0016). A recipe
-// already installed keeps its record.
+// The other half took away the packages x also replaces, so x's removal must
+// bring them back (ADR 0016).
+func inherit(x *catalog.Recipe, replaced string) []string {
+	out := append([]string{}, x.Replaced...)
+	have := map[string]bool{}
+	for _, e := range out {
+		have[strings.Fields(e)[0]] = true
+	}
+	for _, e := range splitList(replaced) {
+		f := strings.Fields(e)
+		if len(f) == 2 && contains(x.Replaces, f[0]) && !have[f[0]] {
+			have[f[0]] = true
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// localRepo is where a reinstall looks for its copies; tests change it.
+var localRepo = repo.Dir
+
+// Copies in the local repository are reused when intact, else rebuilt. Debian's
+// and vendors' packages the recipe brings are apt's to reinstall.
+func (t *txn) again(r *catalog.Recipe, v string, inst map[string]pkgInfo) {
+	if t.reinstall == nil {
+		t.reinstall, t.fromRepo = map[string]bool{}, map[string]bool{}
+	}
+	copies := map[string]string{}
+	whole := true
+	var mine []string
+	for p, i := range inst {
+		if i.Recipe != r.Name || i.Version != v {
+			continue
+		}
+		name := strings.SplitN(p, ":", 2)[0]
+		t.reinstall[name] = true
+		mine = append(mine, name)
+		if d, ok := repo.Find(localRepo, name, v); ok {
+			copies[name] = d
+		} else {
+			whole = false
+		}
+	}
+	if t.restoring {
+		t.restoreConfig(r, mine)
+	}
+	if !whole || copies[r.Package()] == "" {
+		return
+	}
+	t.fromRepo[r.Name] = true
+	if t.prebuilt == nil {
+		t.prebuilt = map[string]string{}
+	}
+	t.prebuilt[r.Name] = copies[r.Package()]
+	for name, d := range copies {
+		if name == r.Package() {
+			continue
+		}
+		if t.parts == nil {
+			t.parts = map[string]string{}
+		}
+		t.parts[name], t.versions[name] = d, v
+	}
+}
+
+// An edited config file is moved to <file>.dpkg-old before apt runs; dpkg
+// recreates every missing one.
+func (t *txn) restoreConfig(r *catalog.Recipe, pkgs []string) {
+	_, edited := verify(pkgs)
+	if len(edited) == 0 {
+		return
+	}
+	sort.Strings(edited)
+	t.configs = append(t.configs, edited...)
+	t.system = append(t.system, ui.Pair{Item: "config restored: " + strings.Join(edited, ", "), Reason: r.Name + "; edited copies kept as <file>.dpkg-old"})
+}
+
+// A recipe already installed keeps its record of replaced packages (ADR 0016).
 func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[string]pkgInfo) {
 	if p, ok := byRecipe[r.Name]; ok {
 		r.Replaced = splitList(inst[p].Replaced)
@@ -297,9 +396,8 @@ func (t *txn) replace(r *catalog.Recipe, byRecipe map[string]string, inst map[st
 	}
 }
 
-// expectWith lets r's own automatic packages go with it: apt may remove
-// them by a conflict rather than as unused (4.1). Manual ones stay
-// surprises.
+// apt may remove r's automatic packages by a conflict rather than as unused.
+// Manual ones stay surprises.
 func (t *txn) expectWith(r *catalog.Recipe, inst map[string]pkgInfo) {
 	manual := manualPkgs()
 	for _, p := range r.Packages {
@@ -309,8 +407,7 @@ func (t *txn) expectWith(r *catalog.Recipe, inst map[string]pkgInfo) {
 	}
 }
 
-// manualPkgs is the packages marked manual, asked of apt once per run: the
-// plan is made before anything changes.
+// Asked of apt once per run: the plan is made before anything changes.
 var manualPkgs = sync.OnceValue(func() map[string]bool {
 	m := map[string]bool{}
 	if out, err := exec.Command("apt-mark", "showmanual").Output(); err == nil {
@@ -321,7 +418,6 @@ var manualPkgs = sync.OnceValue(func() map[string]bool {
 	return m
 })
 
-// splitList reads a comma-separated control field.
 func splitList(v string) []string {
 	var s []string
 	for _, x := range strings.Split(v, ",") {
@@ -332,10 +428,8 @@ func splitList(v string) []string {
 	return s
 }
 
-// leaveBackports undoes a backports recipe (4.6): its packages, and the
-// automatic backports packages they brought, return to stable; those with no
-// stable version (a versioned kernel) or nothing left using them are
-// removed. Packages that other backports recipes still use are skipped.
+// Packages with no stable version (a versioned kernel) or nothing left using
+// them are removed; those other backports recipes use are skipped.
 func (t *txn) leaveBackports(pinned, others []string, inst map[string]pkgInfo, leaving map[string]bool) {
 	manual := manualPkgs()
 	keep := map[string]bool{}
@@ -370,7 +464,6 @@ func (t *txn) leaveBackports(pinned, others []string, inst map[string]pkgInfo, l
 	}
 }
 
-// installedDeps is pkgs and everything installed they depend on.
 func installedDeps(pkgs []string) []string {
 	if len(pkgs) == 0 {
 		return nil
@@ -415,7 +508,6 @@ func supports(r *catalog.Recipe, release int) bool {
 	return false
 }
 
-// pkgArgs is name=version for apt-get, sorted.
 func pkgArgs(m map[string]string) []string {
 	var s []string
 	for n, v := range m {
@@ -425,8 +517,7 @@ func pkgArgs(m map[string]string) []string {
 	return s
 }
 
-// aptLine shows one line of apt-get output: tidy verbs from the status
-// channel, fetch lines, and anything else a package prints (12.3).
+// aptLine tidies status-channel lines and shows anything else a package prints.
 func (a *app) aptLine(versions map[string]string, warnings *[]string) func(string) {
 	last := ""
 	say := func(color, verb, text string) {
@@ -485,7 +576,7 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 			return
 		}
 		if strings.HasPrefix(l, "debconf: ") && warnings != nil {
-			*warnings = append(*warnings, l) // a question answered with its default (8.11)
+			*warnings = append(*warnings, l) // a question answered with its default
 		}
 		if !apt.Chatter(l) {
 			a.out.Raw(l)
@@ -493,13 +584,11 @@ func (a *app) aptLine(versions map[string]string, warnings *[]string) func(strin
 	}
 }
 
-// notInstalled reports whether pkg is no longer installed, as after a removal.
 func notInstalled(pkg string) bool {
 	out, _ := exec.Command("dpkg-query", "-W", "-f", "${db:Status-Abbrev}", pkg).Output()
 	return !strings.HasPrefix(string(out), "ii")
 }
 
-// notices repeats what needs the user: reboots and per-user steps.
 func (a *app) notices(rs []*catalog.Recipe, versions map[string]string) {
 	var reboot []string
 	if b, err := os.ReadFile("/run/reboot-required.pkgs"); err == nil {
@@ -529,9 +618,8 @@ func (a *app) notices(rs []*catalog.Recipe, versions map[string]string) {
 	a.out.Blank()
 }
 
-// unfinished handles an earlier operation that did not finish (8.3): it
-// says so, lets dpkg recover once confirmed, then offers the earlier plan
-// again. exitOK means the current command may go on.
+// unfinished lets dpkg recover once confirmed, then offers the earlier plan.
+// exitOK means the current command may go on.
 func (a *app) unfinished() int {
 	j, err := state.Unfinished(state.Dir)
 	if err != nil {
@@ -572,7 +660,7 @@ func (a *app) unfinished() int {
 	a.out.Blank()
 	switch j.Command {
 	case "install":
-		return a.install(j.Recipes)
+		return a.install(append(append([]string{}, j.Options...), j.Recipes...))
 	case "remove":
 		return a.remove(j.Recipes)
 	case "upgrade":
@@ -594,7 +682,7 @@ func (a *app) lock() (*os.File, int) {
 	return f, exitOK
 }
 
-// sudo asks for the password once and keeps the timestamp fresh until stop.
+// sudo keeps the timestamp fresh until stop.
 func (a *app) sudo() (stop func(), err error) {
 	cmd := exec.Command("sudo", "-v")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
