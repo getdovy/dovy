@@ -228,8 +228,11 @@ func (a *app) rows() ([]row, int) {
 		}
 		if v, ok := inst[n]; ok {
 			x.version, x.status = v, "installed"
-			if upstream(v) != r.Upstream() {
-				x.status = "update " + r.Upstream()
+			if gone(r) {
+				x.note = note(r)
+			}
+			if want := offered(r); want != "" && upstream(v) != want {
+				x.status = "update " + want
 			}
 		}
 		out = append(out, x)
@@ -241,6 +244,18 @@ func (a *app) rows() ([]row, int) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out, exitOK
+}
+
+// gone reports a local-build whose files are no longer there: what is
+// installed stays as it is.
+func gone(r *catalog.Recipe) bool { return r.Kind == catalog.LocalBuild && r.Input == "" }
+
+// offered is the version the catalog offers for r; "" when its files are gone.
+func offered(r *catalog.Recipe) string {
+	if gone(r) {
+		return ""
+	}
+	return r.Upstream()
 }
 
 // upstream strips the Debian revision: 1.0.0.85-1~dovy1 -> 1.0.0.85.
@@ -364,8 +379,8 @@ func (a *app) show(args []string) int {
 	version := r.Upstream()
 	if v, ok := inst[name]; ok {
 		version = v + " (installed)"
-		if upstream(v) != r.Upstream() {
-			version += ", " + r.Upstream() + " available"
+		if want := offered(r); want != "" && upstream(v) != want {
+			version += ", " + want + " available"
 		}
 	}
 	a.out.Rule("", name)

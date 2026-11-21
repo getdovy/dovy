@@ -94,8 +94,7 @@ func (a *app) upgrade() int {
 			t.notices = append(t.notices, ui.Pair{Item: name, Reason: fmt.Sprintf("not built for Debian %d; kept as is until the recipe supports it, or: dovy remove %s", release, name)})
 			continue
 		}
-		if r.Kind == catalog.LocalBuild && r.Input == "" { // its folder is gone or empty
-			t.notices = append(t.notices, ui.Pair{Item: name, Reason: "no " + strings.Join(r.Local.Match, ", ") + " files in " + r.Local.Path + ": kept as installed"})
+		if gone(r) { // its folder is gone or empty: what is installed stays
 			continue
 		}
 		if why := unavailable(r, rs); why != "" {
