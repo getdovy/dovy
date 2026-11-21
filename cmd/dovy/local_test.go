@@ -35,3 +35,20 @@ func TestLocalUnavailable(t *testing.T) {
 		t.Errorf("source %q", s)
 	}
 }
+
+func TestLocalGone(t *testing.T) {
+	r := &catalog.Recipe{Name: "fonts-windows", Kind: catalog.LocalBuild, Version: "1", Local: &catalog.Local{Path: "~/Downloads/fonts-ms", Match: []string{"*.ttf"}}}
+	// Folder gone: nothing to offer, so an installed 1+... is not "update 1".
+	if !gone(r) || offered(r) != "" {
+		t.Errorf("folder gone: gone=%v offered=%q", gone(r), offered(r))
+	}
+	// Folder back, changed since install: its new version is offered.
+	r.Input = "20261121090000"
+	if gone(r) || offered(r) != "1+20261121090000" {
+		t.Errorf("folder back: gone=%v offered=%q", gone(r), offered(r))
+	}
+	// Other kinds always offer their version.
+	if o := offered(&catalog.Recipe{Kind: catalog.Setup, Version: "1"}); o != "1" {
+		t.Errorf("setup: %q", o)
+	}
+}
