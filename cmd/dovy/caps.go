@@ -290,8 +290,11 @@ func (t *txn) repacked(r *catalog.Recipe, cache string) (path, version string, r
 	if err := os.WriteFile(filepath.Join(parts, q.Name+".sources"), []byte(capability.RepoSource(q, keyring, nil)), 0o644); err != nil {
 		return "", "", refusal, err
 	}
+	// No dpkg status: an installed repack (2.105.0-1~dovy13) sorts above
+	// the vendor version (2.105.0), becomes the candidate and has no source here.
 	opts := []string{"-q", "-o", "Dir::Etc::SourceList=/dev/null", "-o", "Dir::Etc::SourceParts=" + parts,
 		"-o", "Dir::Etc::PreferencesParts=" + parts, "-o", "Dir::State::Lists=" + lists,
+		"-o", "Dir::State::status=/dev/null",
 		"-o", "Dir::Cache=" + filepath.Join(dir, "cache"), "-o", "Debug::NoLocking=1"}
 	for _, args := range [][]string{{"update"}, {"download", r.Name}} {
 		cmd := exec.Command("apt-get", append(append([]string{}, opts...), args...)...)
